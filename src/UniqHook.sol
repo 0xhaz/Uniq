@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: SEE LICENSE IN LICENSE
 pragma solidity ^0.8.24;
 
-import {BaseHook} from "v4-periphery/base/hooks/BaseHook.sol";
+import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {SqrtPriceMath} from "v4-core/libraries/SqrtPriceMath.sol";
 import {TickBitmap} from "v4-core/libraries/TickBitmap.sol";
@@ -71,7 +71,7 @@ contract UniqHook is BaseHook, IUniqHook {
     function beforeInitialize(address, PoolKey calldata key, uint160, bytes calldata)
         external
         override
-        onlyByManager
+        onlyByPoolManager
         returns (bytes4)
     {
         _initialize(_getTWAMM(key));
@@ -83,7 +83,7 @@ contract UniqHook is BaseHook, IUniqHook {
         PoolKey calldata key,
         IPoolManager.ModifyLiquidityParams calldata,
         bytes calldata
-    ) external override onlyByManager returns (bytes4) {
+    ) external override onlyByPoolManager returns (bytes4) {
         executeTWAMMOrders(key);
         return this.beforeAddLiquidity.selector;
     }
@@ -91,7 +91,7 @@ contract UniqHook is BaseHook, IUniqHook {
     function beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata, bytes calldata)
         external
         override
-        onlyByManager
+        onlyByPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         executeTWAMMOrders(key);
@@ -120,14 +120,17 @@ contract UniqHook is BaseHook, IUniqHook {
     /// @inheritdoc IUniqHook
     function executeTWAMMOrders(PoolKey memory key) public {
         PoolId poolId = key.toId();
-        (uint160 sqrtPriceX96,,,) = manager.getSlot0(poolId);
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
         State storage twamm = uniqAmmStates[poolId];
 
-        (bool zeroForOne, uint160 sqrtPriceLimitX96) =
-            _executeTWAMMOrders(twamm, manager, key, PoolParamsOnExecute(sqrtPriceX96, manager.getLiquidity(poolId)));
+        (bool zeroForOne, uint160 sqrtPriceLimitX96) = _executeTWAMMOrders(
+            twamm, poolManager, key, PoolParamsOnExecute(sqrtPriceX96, poolManager.getLiquidity(poolId))
+        );
 
         if (sqrtPriceLimitX96 != 0 && sqrtPriceLimitX96 != sqrtPriceX96) {
-            manager.unlock(abi.encode(key, IPoolManager.SwapParams(zeroForOne, type(int256).max, sqrtPriceLimitX96)));
+            poolManager.unlock(
+                abi.encode(key, IPoolManager.SwapParams(zeroForOne, type(int256).max, sqrtPriceLimitX96))
+            );
         }
     }
 

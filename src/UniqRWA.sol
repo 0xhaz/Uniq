@@ -6,7 +6,7 @@ import {ConfirmedOwner} from "chainlink/contracts/src/v0.8/shared/access/Confirm
 import {FunctionsRequest} from "chainlink/contracts/src/v0.8/functions/dev/v1_0_0/libraries/FunctionsRequest.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Oracle} from "src/libraries/Oracle.sol";
-import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {RWALib, Positions, RWAAssetData, RWARequest, RWAStatus} from "src/libraries/RWALib.sol";
 import {Constants} from "src/libraries/Constants.sol";

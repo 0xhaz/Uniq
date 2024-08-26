@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: SEE LICENSE IN LICENSE
 pragma solidity ^0.8.24;
 
-import {ERC721, IERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
@@ -57,11 +57,6 @@ contract UniqComNFT is IUniqComNFT, ERC721Enumerable, EIP712, ERC721URIStorage, 
         _unpause();
     }
 
-    function approve(address to, uint256 tokenId) public override(ERC721, IERC721) {
-        super.approve(to, tokenId);
-        tokenOwners[tokenId] = to;
-    }
-
     function updateMaxSupply(uint256 newAmount) public onlyAdmin {
         currentMaxSupply = newAmount;
     }
@@ -93,10 +88,6 @@ contract UniqComNFT is IUniqComNFT, ERC721Enumerable, EIP712, ERC721URIStorage, 
 
     function tokenOwner(uint256 tokenId) public view returns (address) {
         return ownerOf(tokenId);
-    }
-
-    function tokenExists(uint256 tokenId) public view returns (bool) {
-        return _exists(tokenId);
     }
 
     function getTokenOwner(uint256 tokenId) public view returns (address) {
@@ -213,15 +204,21 @@ contract UniqComNFT is IUniqComNFT, ERC721Enumerable, EIP712, ERC721URIStorage, 
         return super.tokenURI(tokenId);
     }
 
-    function _beforeTokenTransfer(address from, address to, uint256 tokenId, uint256 batchSize)
-        internal
-        override(ERC721, ERC721Enumerable, ERC721Pausable)
-    {
-        super._beforeTokenTransfer(from, to, tokenId, batchSize);
+    function _increaseBalance(address account, uint128 value) internal virtual override(ERC721, ERC721Enumerable) {
+        super._increaseBalance(account, value);
     }
 
-    function _burn(uint256 tokenId) internal override(ERC721, ERC721URIStorage) {
-        super._burn(tokenId);
+    /// @dev This override prevents UniqNFT from being moved to the ERC6551 locker wallet of another UniqNFT
+    function _update(address to, uint256 tokenId, address auth)
+        internal
+        override(ERC721, ERC721Enumerable, ERC721Pausable)
+        returns (address)
+    {
+        bool isUniqWallet = ERC165Checker.supportsInterface(to, Constants.UNIQWALLET);
+        if (isUniqWallet) {
+            revert UniqComNFT__CannotMoveToWallet();
+        }
+        return super._update(to, tokenId, auth);
     }
 
     function supportsInterface(bytes4 interfaceId)

@@ -6,7 +6,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 import {UniqComNFT} from "src/token/UniqComNFT.sol";
 import {DeployUniqComNFT} from "script/DeployUniqComNFT.s.sol";
 import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
-import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {UniqWallet} from "src/UniqWallet.sol";

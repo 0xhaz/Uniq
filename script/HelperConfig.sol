@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: SEE LICENSE IN LICENSE
-pragma solidity ^0.8.25;
+pragma solidity ^0.8.24;
 
 import {MockV3Aggregator} from "test/mocks/MockV3Aggregator.sol";
 import {MockFunctionsRouter} from "test/mocks/MockFunctionsRouter.sol";
