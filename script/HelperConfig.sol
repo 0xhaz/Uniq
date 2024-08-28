@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: SEE LICENSE IN LICENSE
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.25;
 
 import {MockV3Aggregator} from "test/mocks/MockV3Aggregator.sol";
 import {MockFunctionsRouter} from "test/mocks/MockFunctionsRouter.sol";
@@ -40,6 +40,7 @@ contract HelperConfig {
     bytes32 public constant ASSET_NAME = "TSLA";
 
     uint256 public constant EXPIRATION_INTERVAL = 60 * 60 * 24 * 7; // 1 week
+    uint256 public constant BLOCK_TREE = 0;
 
     constructor() {
         chainIdToNetworkConfig[137] = getPolygonConfig();

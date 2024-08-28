@@ -9,7 +9,6 @@ import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 
 /// @title Helper functions to access pool information
-/// TODO: Expose other getters on core with extsload. Only use when extsload is available and storage layout is frozen.
 library PoolGetters {
     using StateLibrary for IPoolManager;
 

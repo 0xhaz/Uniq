@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.25;
 
 import {Test, console} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
@@ -18,10 +18,10 @@ import {PoolSwapTest} from "v4-core/test/PoolSwapTest.sol";
 import {PoolDonateTest} from "v4-core/test/PoolDonateTest.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {CurrencyLibrary, Currency} from "v4-core/types/Currency.sol";
-import {UniqHook} from "src/UniqHook.sol";
 import {IUniqHook} from "src/interfaces/IUniqHook.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {DeployUniqHook} from "script/DeployUniqHook.s.sol";
+import {DeployUniqHook, UniqHook} from "script/DeployUniqHook.s.sol";
+import {LongTermOrder} from "src/libraries/LongTermOrder.sol";
 
 contract UniqHookTest is Test, Deployers, GasSnapshot {
     using PoolIdLibrary for PoolKey;
@@ -58,8 +58,8 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
         deployFreshManagerAndRouters();
         (currency0, currency1) = deployMintAndApprove2Currencies();
 
-        DeployUniqHook uniqHookDeployer = new DeployUniqHook();
-        uniqHook = UniqHook(uniqHookDeployer.run());
+        // DeployUniqHook uniqHookDeployer = new DeployUniqHook();
+        // uniqHook = UniqHook(uniqHookDeployer.run());
 
         tsla = MockERC20(Currency.unwrap(currency0));
         usdc = MockERC20(Currency.unwrap(currency1));
@@ -123,13 +123,44 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
         );
     }
 
-    function TestUniqHook_beforeInitialize_setsLastVirtualOrderTimestamp() public {
+    function testUniqHook_beforeInitialize_setsLastVirtualOrderTimestamp() public {
         (PoolKey memory initKey, PoolId initId) = newPoolKeyWithTWAMM(uniqHook);
-        assertEq(uniqHook.lastVirtualOrderTimestamp(initId), 0);
+
+        assertEq(uniqHook.getLastVirtualOrder(initId), 0);
         vm.warp(10_000);
 
         manager.initialize(initKey, SQRT_PRICE_1_1, ZERO_BYTES);
-        assertEq(uniqHook.lastVirtualOrderTimestamp(initId), 10_000);
+        assertEq(uniqHook.getLastVirtualOrder(initId), 10_000);
+    }
+
+    function testUniqHook_submitOrder_setOrderWithCorrectPoolAndInfo() public {
+        uint160 expiration = 30_000;
+        uint160 submitTimestamp = 10_000;
+        uint160 duration = expiration - submitTimestamp;
+
+        LongTermOrder.OrderKey memory orderKey =
+            LongTermOrder.OrderKey({owner: address(this), expiration: expiration, zeroForOne: true});
+
+        LongTermOrder.Order memory nullOrder = uniqHook.getOrder(poolKey, orderKey);
+        assertEq(nullOrder.sellRate, 0);
+        assertEq(nullOrder.rewardsFactorLast, 0);
+
+        vm.warp(10_000);
+        tsla.approve(address(uniqHook), 100 ether);
+        snapStart("submitOrder");
+        uniqHook.submitOrder(poolKey, orderKey, 1 ether);
+        snapEnd();
+
+        LongTermOrder.Order memory submittedOrder = uniqHook.getOrder(poolKey, orderKey);
+        (uint256 currentSellRate0For1, uint256 currentRewardFactor0For1) = uniqHook.getOrderPool(poolKey, true);
+        (uint256 currentSellRate1For0, uint256 currentRewardFactor1For0) = uniqHook.getOrderPool(poolKey, false);
+
+        assertEq(submittedOrder.sellRate, 1 ether / duration);
+        assertEq(submittedOrder.rewardsFactorLast, 0);
+        assertEq(currentSellRate0For1, 1 ether / duration);
+        assertEq(currentSellRate1For0, 0);
+        assertEq(currentRewardFactor0For1, 0);
+        assertEq(currentRewardFactor1For0, 0);
     }
 
     function newPoolKeyWithTWAMM(IHooks hooks) public returns (PoolKey memory, PoolId) {

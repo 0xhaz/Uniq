@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: SEE LICENSE IN LICENSE
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.25;
 
 interface IUniqComNFT {
     event UniqComNFT__Minted(uint256 indexed tokenId, string tokenURI, address ownerAddress);
