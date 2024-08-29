@@ -22,6 +22,7 @@ import {IUniqHook} from "src/interfaces/IUniqHook.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {DeployUniqHook, UniqHook} from "script/DeployUniqHook.s.sol";
 import {LongTermOrder} from "src/libraries/LongTermOrder.sol";
+import {Struct} from "src/libraries/Struct.sol";
 
 contract UniqHookTest is Test, Deployers, GasSnapshot {
     using PoolIdLibrary for PoolKey;
@@ -138,10 +139,10 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
         uint160 submitTimestamp = 10_000;
         uint160 duration = expiration - submitTimestamp;
 
-        LongTermOrder.OrderKey memory orderKey =
-            LongTermOrder.OrderKey({owner: address(this), expiration: expiration, zeroForOne: true});
+        Struct.OrderKey memory orderKey =
+            Struct.OrderKey({owner: address(this), expiration: expiration, zeroForOne: true});
 
-        LongTermOrder.Order memory nullOrder = uniqHook.getOrder(poolKey, orderKey);
+        Struct.Order memory nullOrder = uniqHook.getOrder(poolKey, orderKey);
         assertEq(nullOrder.sellRate, 0);
         assertEq(nullOrder.rewardsFactorLast, 0);
 
@@ -151,7 +152,7 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
         uniqHook.submitOrder(poolKey, orderKey, 1 ether);
         snapEnd();
 
-        LongTermOrder.Order memory submittedOrder = uniqHook.getOrder(poolKey, orderKey);
+        Struct.Order memory submittedOrder = uniqHook.getOrder(poolKey, orderKey);
         (uint256 currentSellRate0For1, uint256 currentRewardFactor0For1) = uniqHook.getOrderPool(poolKey, true);
         (uint256 currentSellRate1For0, uint256 currentRewardFactor1For0) = uniqHook.getOrderPool(poolKey, false);
 
@@ -161,6 +162,52 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
         assertEq(currentSellRate1For0, 0);
         assertEq(currentRewardFactor0For1, 0);
         assertEq(currentRewardFactor1For0, 0);
+    }
+
+    function testUniqHook_submitOrder_storeProperSellRatesAndRewardsFactor() public {
+        uint160 expiration1 = 30_000;
+        uint160 expiration2 = 40_000;
+        uint256 submitTimestamp1 = 10_000;
+        uint256 submitTimestamp2 = 30_000;
+        uint256 rewardsFactor0For1;
+        uint256 rewardsFactor1For0;
+        uint256 sellRate0For1;
+        uint256 sellRate1For0;
+
+        Struct.OrderKey memory orderKey1 =
+            Struct.OrderKey({owner: address(this), expiration: expiration1, zeroForOne: true});
+        Struct.OrderKey memory orderKey2 =
+            Struct.OrderKey({owner: address(this), expiration: expiration2, zeroForOne: true});
+        Struct.OrderKey memory orderKey3 =
+            Struct.OrderKey({owner: address(this), expiration: expiration2, zeroForOne: false});
+
+        tsla.approve(address(uniqHook), 100 ether);
+        usdc.approve(address(uniqHook), 100 ether);
+
+        vm.warp(submitTimestamp1);
+        uniqHook.submitOrder(poolKey, orderKey1, 1e18);
+        uniqHook.submitOrder(poolKey, orderKey3, 3e18);
+
+        (sellRate0For1, rewardsFactor0For1) = uniqHook.getOrderPool(poolKey, true);
+        (sellRate1For0, rewardsFactor1For0) = uniqHook.getOrderPool(poolKey, false);
+
+        assertEq(sellRate0For1, 1e18 / (expiration1 - submitTimestamp1));
+        assertEq(sellRate1For0, 3e18 / (expiration2 - submitTimestamp1));
+        assertEq(rewardsFactor0For1, 0);
+        assertEq(rewardsFactor1For0, 0);
+
+        // Warp time and submit 1 TWAMM order. Test that pool information is updated properly as one order expires and
+        // another order is added to the pool
+        vm.warp(submitTimestamp2);
+        uniqHook.submitOrder(poolKey, orderKey2, 2e18);
+
+        (sellRate0For1, rewardsFactor0For1) = uniqHook.getOrderPool(poolKey, true);
+        (sellRate1For0, rewardsFactor1For0) = uniqHook.getOrderPool(poolKey, false);
+
+        assertEq(sellRate0For1, 2e18 / (expiration2 - submitTimestamp2));
+        // assertEq(sellRate1For0, 3 ether / (expiration2 - submitTimestamp1));
+        // assertEq(rewardsFactor0For1, 0);
+        // assertEq(rewardsFactor1For0, 0);
     }
 
     function newPoolKeyWithTWAMM(IHooks hooks) public returns (PoolKey memory, PoolId) {

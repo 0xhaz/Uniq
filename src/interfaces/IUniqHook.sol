@@ -7,106 +7,10 @@ import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {OrderPool} from "src/libraries/OrderPool.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {BinarySearchTree} from "src/libraries/BinarySearchTree.sol";
-import {LongTermOrder} from "src/libraries/LongTermOrder.sol";
+import {Struct} from "src/libraries/Struct.sol";
+import {Errors} from "src/libraries/Errors.sol";
 
 interface IUniqHook {
-    /// @notice Thrown when account other than owner attemps to interact with an order
-    /// @param owner The owner of the order
-    /// @param currentAccount The invalid account attempting to interact with the order
-
-    // error MustBeOwner(address owner, address currentAccount);
-
-    /// @notice Thrown when trying to cancel an already completed order
-    /// @param orderKey They orderKey
-    // error CannotModifyCompletedOrder(OrderKey orderKey);
-
-    /// @notice Thrown when trying to submit an order with an expiration that isn't on the interval
-    /// @param expiration The expiration timestamp of the order
-    error ExpirationNotOnInterval(uint256 expiration);
-
-    /// @notice Thrown when trying to submit an order with an expiration time in the past
-    /// @param expiration The expiration timestamp of the order
-    error ExpirationLessThanBlocktime(uint256 expiration);
-
-    /// @notice Thrown when trying to submit an order without initializing TWAMM state first
-    error NotInitialized();
-
-    /// @notice Thrown when trying to submit an order that's already ongoing
-    /// @param orderKey The already existing orderKey
-    // error OrderAlreadyExists(OrderKey orderKey);
-
-    /// @notice Thrown when tring to interact with an order that does not exist
-    /// @param orderKey the already existing orderKey
-    // error OrderDoesNotExist(OrderKey orderKey);
-
-    /// @notice Thrown when trying to subtract more value from a long term order than exists
-    /// @param orderKey The orderKey
-    /// @param unsoldAmount The amount still unsold
-    /// @param amountDelta The amount delta for the order
-    // error InvalidAmountDelta(OrderKey orderKey, uint256 unsoldAmount, int256 amountDelta);
-
-    /// @notice Thrown when submitting an order with a sellRate of 0
-    error SellRateCannotBeZero();
-
-    /// @notice Contains full state related to the TWAMM
-    /// @member lastVirtualOrderTimestamp Last timestamp in which virtual orders were executed
-    /// @member orderPool0For1 Order pool trading token0 for token1 of pool
-    /// @member orderPool1For1 Order pool trading token1 for token0 of pool
-    /// @member orders Mapping of orderId to individual orders on pool
-    // struct State {
-    //     uint256 lastVirtualOrderTimestamp;
-    //     OrderPool.State orderPool0For1;
-    //     OrderPool.State orderPool1For0;
-    //     mapping(bytes32 => Order) orders;
-    // }
-
-    /// @notice Information associated with a long term order
-    /// @member sellRate Amount of tokens sold per interval
-    /// @member earningFactorLast the accrued earnings factor from which to start claiming owed earnings for this order
-    // struct Order {
-    //     uint256 sellRate;
-    //     uint256 earningsFactorLast;
-    // }
-
-    /// @notice Information that identifies an order
-    /// @member owner The owner of the order
-    /// @member expiration The expiration timestamp of the order
-    /// @member zeroForOne Bool whether the order is zeroForOne
-    // struct OrderKey {
-    //     address owner;
-    //     uint160 expiration;
-    //     bool zeroForOne;
-    // }
-
-    /// @notice
-    // struct PoolParamsOnExecute {
-    //     uint160 sqrtPriceX96;
-    //     uint128 liquidity;
-    // }
-
-    // struct AdvanceParams {
-    //     uint256 expirationInterval;
-    //     uint256 nextTimestamp;
-    //     uint256 secondsElapsed;
-    //     PoolParamsOnExecute pool;
-    // }
-
-    // struct AdvanceSingleParams {
-    //     uint256 expirationInterval;
-    //     uint256 nextTimestamp;
-    //     uint256 secondsElapsed;
-    //     PoolParamsOnExecute pool;
-    //     bool zeroForOne;
-    // }
-
-    // struct TickCrossingParams {
-    //     int24 initializedTick;
-    //     uint256 nextTimestamp;
-    //     uint256 secondsElapsedX96;
-    //     PoolParamsOnExecute pool;
-    // }
-
     /// @notice Emitted when a new long term order is submitted
     /// @param poolId The id of the corresponding pool
     /// @param owner The owner of the new order
@@ -149,7 +53,7 @@ interface IUniqHook {
     /// @param amountIn The amount of sell token to add to the order. Some precision on amountIn may be lost up to the
     /// magnitude of (orderKey.expiration - block.timestamp)
     /// @return orderId The bytes32 ID of the order
-    function submitOrder(PoolKey calldata key, LongTermOrder.OrderKey calldata orderKey, uint256 amountIn)
+    function submitOrder(PoolKey calldata key, Struct.OrderKey calldata orderKey, uint256 amountIn)
         external
         returns (bytes32 orderId);
 
@@ -186,10 +90,10 @@ interface IUniqHook {
     /// @return lastVirtualOrderTimestamp The last timestamp in which virtual orders were executed
     function getLastVirtualOrder(PoolId key) external view returns (uint256);
 
-    function getOrder(PoolKey calldata key, LongTermOrder.OrderKey calldata orderKey)
+    function getOrder(PoolKey calldata key, Struct.OrderKey calldata orderKey)
         external
         view
-        returns (LongTermOrder.Order memory);
+        returns (Struct.Order memory);
 
     function getOrderPool(PoolKey calldata key, bool zeroForOne)
         external

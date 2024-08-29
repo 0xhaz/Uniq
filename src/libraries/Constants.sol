@@ -45,6 +45,9 @@ library Constants {
     /// @notice zero bytes32
     bytes32 constant ZERO_BYTES32 = bytes32("");
 
+    /// @notice zero bytes
+    bytes constant ZERO_BYTES = bytes("");
+
     /// @notice The minimum delta for the Hook contract
     int256 constant MIN_DELTA = -1;
 

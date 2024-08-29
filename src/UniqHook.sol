@@ -25,12 +25,13 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Constants} from "src/libraries/Constants.sol";
 import {Oracle} from "src/libraries/Oracle.sol";
 import {LongTermOrder} from "src/libraries/LongTermOrder.sol";
+import {Struct} from "src/libraries/Struct.sol";
+import {console} from "forge-std/Console.sol";
 
 contract UniqHook is BaseHook, IUniqHook {
     using TransferHelper for IERC20Minimal;
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
-    using OrderPool for OrderPool.State;
     using PoolIdLibrary for PoolKey;
     using TickMath for int24;
     using TickMath for uint160;
@@ -42,7 +43,7 @@ contract UniqHook is BaseHook, IUniqHook {
     uint256 public immutable expirationInterval;
 
     /// @notice The state of the long term orders
-    mapping(PoolId => LongTermOrder.OrderState) internal orderStates;
+    mapping(PoolId => Struct.OrderState) internal orderStates;
 
     /// @notice The amount of tokens owed to each user
     mapping(Currency => mapping(address => uint256)) public tokensOwed;
@@ -76,6 +77,7 @@ contract UniqHook is BaseHook, IUniqHook {
         onlyByPoolManager
         returns (bytes4)
     {
+        console.log("////////////////// Initialize TWAMM //////////////////");
         LongTermOrder.initialize(_getTWAMM(key));
 
         return this.beforeInitialize.selector;
@@ -87,6 +89,8 @@ contract UniqHook is BaseHook, IUniqHook {
         IPoolManager.ModifyLiquidityParams calldata,
         bytes calldata
     ) external override onlyByPoolManager returns (bytes4) {
+        console.log("////////////////// Before Add Liqudity //////////////////");
+        executeTWAMMOrders(key);
         return this.beforeAddLiquidity.selector;
     }
 
@@ -96,6 +100,7 @@ contract UniqHook is BaseHook, IUniqHook {
         onlyByPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        console.log("////////////////// Before Swap //////////////////");
         executeTWAMMOrders(key);
         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
@@ -105,15 +110,16 @@ contract UniqHook is BaseHook, IUniqHook {
     ///////////////////////////////////////////////////////////////////////
     /// inheritdoc IUniqHook
     function executeTWAMMOrders(PoolKey memory key) public {
+        console.log("////////////////// Execute TWAMM Orders //////////////////");
         PoolId id = key.toId();
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(id);
-        LongTermOrder.OrderState storage state = orderStates[id];
+        Struct.OrderState storage state = orderStates[id];
 
         (bool zeroForOne, uint160 sqrtPriceLimitX96) = LongTermOrder.executeOrders(
             state,
             poolManager,
             key,
-            LongTermOrder.ExecutePool({sqrtPriceX96: sqrtPriceX96, liquidity: poolManager.getLiquidity(id)}),
+            Struct.ExecutePool({sqrtPriceX96: sqrtPriceX96, liquidity: poolManager.getLiquidity(id)}),
             expirationInterval
         );
 
@@ -125,18 +131,19 @@ contract UniqHook is BaseHook, IUniqHook {
     }
 
     function getLastVirtualOrder(PoolId key) public view returns (uint256) {
-        return orderStates[key].lastVirtualOrderBlock;
+        return orderStates[key].lastVirtualOrderTime;
     }
 
     ///////////////////////////////////////////////////////////////////////
     ///                     External Functions                          ///
     ///////////////////////////////////////////////////////////////////////
-    function submitOrder(PoolKey calldata key, LongTermOrder.OrderKey memory orderKey, uint256 amountIn)
+    function submitOrder(PoolKey calldata key, Struct.OrderKey memory orderKey, uint256 amountIn)
         external
         returns (bytes32 orderId)
     {
+        console.log("////////////////// Submit Order //////////////////");
         PoolId id = PoolId.wrap(keccak256(abi.encode(key)));
-        LongTermOrder.OrderState storage state = orderStates[id];
+        Struct.OrderState storage state = orderStates[id];
         executeTWAMMOrders(key);
 
         uint256 sellRate;
@@ -158,11 +165,12 @@ contract UniqHook is BaseHook, IUniqHook {
         );
     }
 
-    function getOrder(PoolKey calldata key, LongTermOrder.OrderKey calldata orderKey)
+    function getOrder(PoolKey calldata key, Struct.OrderKey calldata orderKey)
         external
         view
-        returns (LongTermOrder.Order memory)
+        returns (Struct.Order memory)
     {
+        console.log("////////////////// Get Order //////////////////");
         return _getOrder(orderStates[PoolId.wrap(keccak256(abi.encode(key)))], orderKey);
     }
 
@@ -171,7 +179,8 @@ contract UniqHook is BaseHook, IUniqHook {
         view
         returns (uint256 currentSellRate, uint256 currentRewardFactor)
     {
-        LongTermOrder.OrderState storage state = _getTWAMM(key);
+        console.log("////////////////// Get Order Pool //////////////////");
+        Struct.OrderState storage state = _getTWAMM(key);
         return zeroForOne
             ? (state.orderPool0For1.currentSellRate, state.orderPool0For1.currentRewardFactor)
             : (state.orderPool1For0.currentSellRate, state.orderPool1For0.currentRewardFactor);
@@ -181,15 +190,42 @@ contract UniqHook is BaseHook, IUniqHook {
     ///                     Internal Functions                          ///
     ///////////////////////////////////////////////////////////////////////
 
-    function _getTWAMM(PoolKey memory key) internal view returns (LongTermOrder.OrderState storage) {
+    function _getTWAMM(PoolKey memory key) internal view returns (Struct.OrderState storage) {
+        console.log("////////////////// Get TWAMM //////////////////");
         return orderStates[PoolId.wrap(keccak256(abi.encode(key)))];
     }
 
-    function _getOrder(LongTermOrder.OrderState storage state, LongTermOrder.OrderKey memory orderKey)
+    function _getOrder(Struct.OrderState storage state, Struct.OrderKey memory orderKey)
         internal
         view
-        returns (LongTermOrder.Order storage)
+        returns (Struct.Order storage)
     {
+        console.log("////////////////// Get Order //////////////////");
         return state.orders[keccak256(abi.encode(orderKey))];
+    }
+
+    function _unlockCallback(bytes calldata rawData) internal override returns (bytes memory) {
+        console.log("////////////////// Unlock Callback //////////////////");
+        (PoolKey memory key, IPoolManager.SwapParams memory swapParams) =
+            abi.decode(rawData, (PoolKey, IPoolManager.SwapParams));
+
+        BalanceDelta delta = poolManager.swap(key, swapParams, Constants.ZERO_BYTES);
+
+        if (swapParams.zeroForOne) {
+            if (delta.amount0() < 0) {
+                key.currency0.settle(poolManager, address(this), uint256(uint128(-delta.amount0())), false);
+            }
+            if (delta.amount1() > 0) {
+                key.currency1.take(poolManager, address(this), uint256(uint128(delta.amount1())), false);
+            }
+        } else {
+            if (delta.amount1() < 0) {
+                key.currency1.settle(poolManager, address(this), uint256(uint128(-delta.amount1())), false);
+            }
+            if (delta.amount0() > 0) {
+                key.currency0.take(poolManager, address(this), uint256(uint128(delta.amount0())), false);
+            }
+        }
+        return bytes("");
     }
 }
