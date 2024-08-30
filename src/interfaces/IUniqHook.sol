@@ -45,7 +45,7 @@ interface IUniqHook {
     );
 
     /// @notice Time interval on which orders are allowed to expire. Conserves processing needed on execute
-    function expirationInterval() external view returns (uint256);
+    // function expirationInterval() external view returns (uint256);
 
     /// @notice Submits a new long term order into the TWAMM. Also executes TWAMM orders if not up to date
     /// @param key The PoolKey for which to identify the amm pool of the order
@@ -62,9 +62,9 @@ interface IUniqHook {
     /// @param orderKey The OrderKey for which to identify the order
     /// @param amountDelta The delta for the order sell amount. Negative to remove from order, positive to add, or
     /// -1 to remove the full amount from the order
-    // function updateOrder(PoolKey calldata key, OrderKey calldata orderKey, int256 amountDelta)
-    //     external
-    //     returns (uint256 tokens0Owed, uint256 tokens1Owed);
+    function updateOrder(PoolKey calldata key, Struct.OrderKey calldata orderKey, int256 amountDelta)
+        external
+        returns (uint256 tokens0Owed, uint256 tokens1Owed);
 
     /// @notice Claim tokens owed from TWAMM contract
     /// @param token The token to claim
@@ -80,14 +80,14 @@ interface IUniqHook {
     /// @param key The pool key associated with the TWAMM orders
     function executeTWAMMOrders(PoolKey memory key) external;
 
-    /// @notice Get the total of tokens owed to an owner
-    /// @param token The token to check
-    /// @param owner The owner to check
+    // /// @notice Get the total of tokens owed to an owner
+    // /// @param token The token to check
+    // /// @param owner The owner to check
     function tokensOwed(Currency token, address owner) external returns (uint256);
 
-    /// @notice Get the last timestamp in which virtual orders were executed
-    /// @param key The pool key associated with the TWAMM orders
-    /// @return lastVirtualOrderTimestamp The last timestamp in which virtual orders were executed
+    // /// @notice Get the last timestamp in which virtual orders were executed
+    // /// @param key The pool key associated with the TWAMM orders
+    // /// @return lastVirtualOrderTimestamp The last timestamp in which virtual orders were executed
     function getLastVirtualOrder(PoolId key) external view returns (uint256);
 
     function getOrder(PoolKey calldata key, Struct.OrderKey calldata orderKey)

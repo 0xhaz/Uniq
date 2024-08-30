@@ -20,9 +20,10 @@ import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {CurrencyLibrary, Currency} from "v4-core/types/Currency.sol";
 import {IUniqHook} from "src/interfaces/IUniqHook.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {DeployUniqHook, UniqHook} from "script/DeployUniqHook.s.sol";
+import {DeployUniqHook} from "script/DeployUniqHook.s.sol";
 import {LongTermOrder} from "src/libraries/LongTermOrder.sol";
 import {Struct} from "src/libraries/Struct.sol";
+import {UniqHook} from "src/UniqHook.sol";
 
 contract UniqHookTest is Test, Deployers, GasSnapshot {
     using PoolIdLibrary for PoolKey;
@@ -67,7 +68,7 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
 
         UniqHookImplementation impl = new UniqHookImplementation(manager, 10_000, uniqHook);
         // Tell the VM to start recording all storage reads and writes
-        (, bytes32[] memory writes) = vm.accesses(address(impl));
+        (, bytes32[] memory writes) = vm.accesses(address(uniqHook));
         // Enabling custom precompile for UniqHook
         vm.etch(address(uniqHook), address(impl).code);
 
@@ -205,9 +206,9 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
         (sellRate1For0, rewardsFactor1For0) = uniqHook.getOrderPool(poolKey, false);
 
         assertEq(sellRate0For1, 2e18 / (expiration2 - submitTimestamp2));
-        // assertEq(sellRate1For0, 3 ether / (expiration2 - submitTimestamp1));
-        // assertEq(rewardsFactor0For1, 0);
-        // assertEq(rewardsFactor1For0, 0);
+        assertEq(sellRate1For0, 3 ether / (expiration2 - submitTimestamp1));
+        assertEq(rewardsFactor0For1, 1712020976636017581269515821040000);
+        assertEq(rewardsFactor1For0, 1470157410324350030712806974476955);
     }
 
     function newPoolKeyWithTWAMM(IHooks hooks) public returns (PoolKey memory, PoolId) {

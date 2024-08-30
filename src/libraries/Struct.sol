@@ -10,7 +10,7 @@ library Struct {
     /// @member salesRate Mapping(timestamp => saleRate) Mapping of the sales rate at a certain timestamp
     /// @member rewardFactorAtSubmission Mapping (timestamp => rewardFactor) The reward factor accrued at time of submission.
     /// @member rewardFactorAtBlock  Mapping (block => rewardFactor) The reward factor accrued at a certain block
-    struct State {
+    struct OrderPool {
         uint256 currentSellRate;
         mapping(uint256 => uint256) sellRateEndingAtTime;
         uint256 currentRewardFactor;
@@ -70,8 +70,8 @@ library Struct {
     /// @notice mapping of order id to its status (true for active, false for inactive)
     struct OrderState {
         uint256 lastVirtualOrderTime;
-        State orderPool0For1;
-        State orderPool1For0;
+        OrderPool orderPool0For1;
+        OrderPool orderPool1For0;
         mapping(bytes32 => Order) orders;
     }
 }

@@ -108,7 +108,7 @@ contract UniqHook is BaseHook, IUniqHook {
     ///////////////////////////////////////////////////////////////////////
     ///                     Public Functions                            ///
     ///////////////////////////////////////////////////////////////////////
-    /// inheritdoc IUniqHook
+    /// @inheritdoc IUniqHook
     function executeTWAMMOrders(PoolKey memory key) public {
         console.log("////////////////// Execute TWAMM Orders //////////////////");
         PoolId id = key.toId();
@@ -137,6 +137,7 @@ contract UniqHook is BaseHook, IUniqHook {
     ///////////////////////////////////////////////////////////////////////
     ///                     External Functions                          ///
     ///////////////////////////////////////////////////////////////////////
+    /// @inheritdoc IUniqHook
     function submitOrder(PoolKey calldata key, Struct.OrderKey memory orderKey, uint256 amountIn)
         external
         returns (bytes32 orderId)
@@ -165,6 +166,22 @@ contract UniqHook is BaseHook, IUniqHook {
         );
     }
 
+    /// @inheritdoc IUniqHook
+    function updateOrder(PoolKey memory key, Struct.OrderKey memory orderKey, int256 amountDelta)
+        external
+        returns (uint256 tokens0Owed, uint256 token1Owed)
+    {
+        PoolId poolId = PoolId.wrap(keccak256(abi.encode(key)));
+        Struct.OrderState storage state = orderStates[poolId];
+
+        executeTWAMMOrders(key);
+
+        // this call reverts if the caller is not the owner of the order
+        (uint256 buyTokensOwed, uint256 sellTokensOwed, uint256 newSellRate, uint256 newRewardFactor) =
+            LongTermOrder.updateOrder(state, orderKey, amountDelta);
+    }
+
+    /// @inheritdoc IUniqHook
     function getOrder(PoolKey calldata key, Struct.OrderKey calldata orderKey)
         external
         view
@@ -174,6 +191,7 @@ contract UniqHook is BaseHook, IUniqHook {
         return _getOrder(orderStates[PoolId.wrap(keccak256(abi.encode(key)))], orderKey);
     }
 
+    /// @inheritdoc IUniqHook
     function getOrderPool(PoolKey calldata key, bool zeroForOne)
         external
         view

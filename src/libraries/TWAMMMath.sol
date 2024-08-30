@@ -1,12 +1,12 @@
-// SPDX-License-Identifier: SEE LICENSE IN LICENSE
-pragma solidity ^0.8.24;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.15;
 
 import {ABDKMathQuad} from "./ABDKMathQuad.sol";
-import {FixedPoint96} from "v4-core/libraries/FixedPoint96.sol";
-import {SafeCast} from "v4-core/libraries/SafeCast.sol";
-import {TickMath} from "v4-core/libraries/TickMath.sol";
+import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @title TWAMM Math - Pure functions for TWAMM calculations
+/// @title TWAMM Math - Pure functions for TWAMM math calculations
 library TwammMath {
     using ABDKMathQuad for bytes16;
     using ABDKMathQuad for uint256;
@@ -25,6 +25,9 @@ library TwammMath {
     // (TickMath.MAX_SQRT_RATIO - 1).fromUInt()
     bytes16 internal constant MAX_SQRT_RATIO_BYTES = 0x409efffb12c7dfa3f8d4a0c91092bb2a;
 
+    uint24 public constant STATIC_FEE_MASK = 0x7FFFFF;
+    uint24 public constant DYNAMIC_FEE_FLAG = 0x800000;
+
     struct PriceParamsBytes16 {
         bytes16 sqrtSellRatio;
         bytes16 sqrtSellRate;
@@ -39,6 +42,12 @@ library TwammMath {
         uint128 liquidity;
         uint256 sellRateCurrent0;
         uint256 sellRateCurrent1;
+    }
+
+    struct FeeParams {
+        bytes16 sqrtSellRatio; // Ratio of sell orders (or trades)
+        bytes16 tradeImpact; // Impact of the trade relative to liquidity
+        bytes16 directionFactor; // Multiplier for directional sensitivity
     }
 
     function getNewSqrtPriceX96(ExecutionUpdateParams memory params) internal pure returns (uint160 newSqrtPriceX96) {
@@ -76,31 +85,31 @@ library TwammMath {
         }
     }
 
-    // function calculateEarningsUpdates(ExecutionUpdateParams memory params, uint160 finalSqrtPriceX96)
-    //     internal
-    //     pure
-    //     returns (uint256 earningsFactorPool0, uint256 earningsFactorPool1)
-    // {
-    //     bytes16 sellRateBytes0 = params.sellRateCurrent0.fromUInt();
-    //     bytes16 sellRateBytes1 = params.sellRateCurrent1.fromUInt();
+    function calculateEarningsUpdates(ExecutionUpdateParams memory params, uint160 finalSqrtPriceX96)
+        internal
+        pure
+        returns (uint256 earningsFactorPool0, uint256 earningsFactorPool1)
+    {
+        bytes16 sellRateBytes0 = params.sellRateCurrent0.fromUInt();
+        bytes16 sellRateBytes1 = params.sellRateCurrent1.fromUInt();
 
-    //     bytes16 sellRatio = sellRateBytes1.div(sellRateBytes0);
-    //     bytes16 sqrtSellRate = sellRateBytes0.mul(sellRateBytes1).sqrt();
+        bytes16 sellRatio = sellRateBytes1.div(sellRateBytes0);
+        bytes16 sqrtSellRate = sellRateBytes0.mul(sellRateBytes1).sqrt();
 
-    //     EarningsFactorParams memory earningsFactorParams = EarningsFactorParams({
-    //         secondsElapsed: params.secondsElapsedX96.fromUInt().div(Q96),
-    //         sellRatio: sellRatio,
-    //         sqrtSellRate: sqrtSellRate,
-    //         prevSqrtPrice: params.sqrtPriceX96.fromUInt().div(Q96),
-    //         newSqrtPrice: finalSqrtPriceX96.fromUInt().div(Q96),
-    //         liquidity: params.liquidity.fromUInt()
-    //     });
+        EarningsFactorParams memory earningsFactorParams = EarningsFactorParams({
+            secondsElapsed: params.secondsElapsedX96.fromUInt().div(Q96),
+            sellRatio: sellRatio,
+            sqrtSellRate: sqrtSellRate,
+            prevSqrtPrice: params.sqrtPriceX96.fromUInt().div(Q96),
+            newSqrtPrice: finalSqrtPriceX96.fromUInt().div(Q96),
+            liquidity: params.liquidity.fromUInt()
+        });
 
-    //     // Trade the amm orders.
-    //     // If liquidity is 0, it trades the twamm orders against each other for the time duration.
-    //     earningsFactorPool0 = getEarningsFactorPool0(earningsFactorParams).mul(Q96).toUInt();
-    //     earningsFactorPool1 = getEarningsFactorPool1(earningsFactorParams).mul(Q96).toUInt();
-    // }
+        // Trade the amm orders.
+        // If liquidity is 0, it trades the twamm orders against each other for the time duration.
+        earningsFactorPool0 = getEarningsFactorPool0(earningsFactorParams).mul(Q96).toUInt();
+        earningsFactorPool1 = getEarningsFactorPool1(earningsFactorParams).mul(Q96).toUInt();
+    }
 
     struct calculateTimeBetweenTicksParams {
         uint256 liquidity;
@@ -175,92 +184,5 @@ library TwammMath {
 
     function reciprocal(bytes16 n) private pure returns (bytes16) {
         return ONE.div(n);
-    }
-
-    ///////////////////////////////////////////////////////////////////////
-    ///           Nezlobin's Directional Fee Functions                  ///
-    ///////////////////////////////////////////////////////////////////////
-
-    /// @notice Key Concepts of Nezlobin's Directional Fee:
-    /// 1. Directional Component: The fee increases when trades move the price in the less desirable direction.
-    ///   (away from equilibrium) and decreases when moving in the favorable direction. (towards equilibrium)
-    /// 2. Sensitivity Factor: A coefficient that determines how sensitive the fee adjustment is relative to the price movement
-    /// @dev High-Level Plan:
-    /// 1. Track Price Movements: Record the current price and the direction of each trade (up or down)
-    /// 2. Fee Adjustment Logic: Calculate the fee based on whether the trade moves the price closer to or further from a reference price (moving average)
-    /// 3. Update the Fee Dynamically: Apply the new fee when calculating earnings updates or price changes
-
-    // Constants for directional fee 0.3%
-    bytes16 internal constant BASE_FEE = 0x3ffd3333333333333333333333333333; // Example: 0.3% (in bytes16)
-    bytes16 internal constant SENSITIVITY = 0x3ffc9999999999999999999999999999; // Sensitivity factor (in bytes16)
-
-    struct DirectionalFeeParams {
-        bytes16 currentPrice;
-        bytes16 previousPrice;
-        bytes16 targetPrice;
-    }
-
-    function calculateDirectionalFee(DirectionalFeeParams memory params)
-        internal
-        pure
-        returns (bytes16 directionalFee)
-    {
-        // Calculate the price difference between the current price and the target price
-        bytes16 priceDifference = params.currentPrice.sub(params.targetPrice);
-
-        // Determine if the price is moving toward or away from the target price
-        bool movingTowardTarget =
-            params.currentPrice.sub(params.targetPrice).abs() < params.previousPrice.sub(params.targetPrice).abs();
-
-        // Adjust the fee based on the direction
-        if (movingTowardTarget) {
-            // Price is moving towards the target price, reduce the fee
-            directionalFee = BASE_FEE.sub(SENSITIVITY.mul(priceDifference.abs()));
-        } else {
-            // Price is moving away from the target price, increase the fee
-            directionalFee = BASE_FEE.add(SENSITIVITY.mul(priceDifference.abs()));
-        }
-
-        // Ensure the fee stays within reasonable bounds (e.g no negative fees)
-        if (directionalFee.isNaN() || directionalFee.isInfinity()) {
-            directionalFee = BASE_FEE;
-        }
-    }
-
-    function calculateEarningsUpdates(ExecutionUpdateParams memory params, uint160 finalSqrtPriceX96)
-        internal
-        pure
-        returns (uint256 earningsFactorPool0, uint256 earningsFactorPool1)
-    {
-        bytes16 directionalFee = calculateDirectionalFee(
-            DirectionalFeeParams({
-                currentPrice: params.sqrtPriceX96.fromUInt().div(Q96),
-                previousPrice: params.sqrtPriceX96.fromUInt().div(Q96),
-                targetPrice: getMovingAverage()
-            })
-        );
-
-        EarningsFactorParams memory earningsFactorParams = EarningsFactorParams({
-            secondsElapsed: params.secondsElapsedX96.fromUInt().div(Q96),
-            sellRatio: params.sellRateCurrent1.fromUInt().div(params.sellRateCurrent0.fromUInt()),
-            sqrtSellRate: params.sellRateCurrent0.fromUInt().mul(params.sellRateCurrent1.fromUInt()).sqrt(),
-            prevSqrtPrice: params.sqrtPriceX96.fromUInt().div(Q96),
-            newSqrtPrice: finalSqrtPriceX96.fromUInt().div(Q96),
-            liquidity: params.liquidity.fromUInt()
-        });
-
-        // Trade the amm orders.
-        // If liquidity is 0, it trades the twamm orders against each other for the time duration.
-        uint256 baseEarningsFactorPool0 = getEarningsFactorPool0(earningsFactorParams).mul(Q96).toUInt();
-        uint256 baseEarningsFactorPool1 = getEarningsFactorPool1(earningsFactorParams).mul(Q96).toUInt();
-
-        // Apply the directional fee to the earnings factors
-        earningsFactorPool0 = (baseEarningsFactorPool0 * directionalFee.toUInt()) / (Q96).toUInt();
-        earningsFactorPool1 = (baseEarningsFactorPool1 * directionalFee.toUInt()) / (Q96).toUInt();
-    }
-
-    function getMovingAverage() internal pure returns (bytes16) {
-        // Implement logic to calculate a target price, such as a simple moving average
-        return 0x40000000000000000000000000000000; // Example: 2.0 (in bytes16)
     }
 }

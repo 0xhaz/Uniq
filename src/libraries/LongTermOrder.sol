@@ -3,13 +3,16 @@ pragma solidity ^0.8.25;
 
 import {IERC20Minimal} from "v4-core/interfaces/external/IERC20Minimal.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
+import {TickBitmap} from "v4-core/libraries/TickBitmap.sol";
 import {OrderPool} from "src/libraries/OrderPool.sol";
 import {PoolGetters, IPoolManager, StateLibrary, PoolId, PoolIdLibrary, Pool} from "src/libraries/PoolGetters.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {FixedPoint96} from "v4-core/libraries/FixedPoint96.sol";
+import {SafeCast} from "v4-core/libraries/SafeCast.sol";
 import {TwammMath} from "src/libraries/TWAMMMath.sol";
 import {SqrtPriceMath} from "v4-core/libraries/SqrtPriceMath.sol";
+import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {Struct} from "src/libraries/Struct.sol";
 import {Errors} from "src/libraries/Errors.sol";
 import {console} from "forge-std/Console.sol";
@@ -17,14 +20,16 @@ import {console} from "forge-std/Console.sol";
 /// @notice Library that handles the state and execution of long term orders
 library LongTermOrder {
     using CurrencyLibrary for Currency;
+    using CurrencySettler for Currency;
     using PoolIdLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
     using PoolGetters for IPoolManager;
-    using OrderPool for Struct.State;
-
-    /// @notice fee for LP providers, 4 decimal places, i.e 30 = 0.3%
-    uint256 public constant LP_FEE = 30;
+    using OrderPool for Struct.OrderPool;
+    using TickMath for int24;
+    using TickMath for uint160;
+    using SafeCast for uint256;
+    using TickBitmap for mapping(int16 => uint256);
 
     /// @notice Initialize state
     function initialize(Struct.OrderState storage self) public {
@@ -49,8 +54,8 @@ library LongTermOrder {
         uint256 prevTimestamp = self.lastVirtualOrderTime;
         uint256 nextExpirationTime = prevTimestamp + (expirationInterval - (prevTimestamp % expirationInterval));
 
-        Struct.State storage orderPool0For1 = self.orderPool0For1;
-        Struct.State storage orderPool1For0 = self.orderPool1For0;
+        Struct.OrderPool storage orderPool0For1 = self.orderPool0For1;
+        Struct.OrderPool storage orderPool1For0 = self.orderPool1For0;
 
         unchecked {
             while (nextExpirationTime <= block.timestamp) {
@@ -140,8 +145,8 @@ library LongTermOrder {
         PoolKey memory poolKey,
         uint160 nextSqrtPriceX96
     ) private view returns (bool initializedCrossingTick, int24 nextTick) {
-        nextTick = TickMath.getTickAtSqrtPrice(pool.sqrtPriceX96);
-        int24 targetTick = TickMath.getTickAtSqrtPrice(nextSqrtPriceX96);
+        nextTick = pool.sqrtPriceX96.getTickAtSqrtPrice();
+        int24 targetTick = nextSqrtPriceX96.getTickAtSqrtPrice();
         bool searchingLeft = nextSqrtPriceX96 < pool.sqrtPriceX96;
         bool nextTickIsFurtherThanTarget = false;
         console.log("////////////////// isCrossingTick //////////////////");
@@ -209,12 +214,12 @@ library LongTermOrder {
         IPoolManager poolManager,
         PoolKey memory poolKey,
         Struct.NextParams memory params
-    ) internal returns (Struct.ExecutePool memory) {
+    ) private returns (Struct.ExecutePool memory) {
         uint160 finalSqrtPriceX96;
         uint256 elapsedSecondsX96 = params.secondsElapsed * FixedPoint96.Q96;
 
-        Struct.State storage orderPool0For1 = self.orderPool0For1;
-        Struct.State storage orderPool1For0 = self.orderPool1For0;
+        Struct.OrderPool storage orderPool0For1 = self.orderPool0For1;
+        Struct.OrderPool storage orderPool1For0 = self.orderPool1For0;
 
         console.log("////////////////// Advance To New Time 3 //////////////////");
 
@@ -272,7 +277,7 @@ library LongTermOrder {
         PoolKey memory poolKey,
         Struct.NextSingleParams memory params
     ) private returns (Struct.ExecutePool memory) {
-        Struct.State storage orderPool = params.zeroForOne ? self.orderPool0For1 : self.orderPool1For0;
+        Struct.OrderPool storage orderPool = params.zeroForOne ? self.orderPool0For1 : self.orderPool1For0;
         uint256 currentSellRate = orderPool.currentSellRate;
         uint256 amountSelling = currentSellRate * params.secondsElapsed;
         uint256 totalRewards;
@@ -360,7 +365,7 @@ library LongTermOrder {
         if (self.orders[orderId].sellRate != 0) revert Errors.OrderAlreadyExists(orderKey);
 
         // OrderPool.State storage pool = orderKey.zeroForOne ? self.orderPool0For1 : self.orderPool1For0;
-        Struct.State storage pool = orderKey.zeroForOne ? self.orderPool0For1 : self.orderPool1For0;
+        Struct.OrderPool storage pool = orderKey.zeroForOne ? self.orderPool0For1 : self.orderPool1For0;
 
         unchecked {
             pool.currentSellRate += sellRate;
@@ -377,6 +382,11 @@ library LongTermOrder {
         console.log("Reward Factor Last: ", pool.currentRewardFactor);
         console.log("Sell Rate: ", sellRate);
     }
+
+    function updateOrder(Struct.OrderState storage self, Struct.OrderKey memory orderKey, int256 amountDelta)
+        internal
+        returns (uint256 buyTokensOwed, uint256 sellTokensOwed, uint256 newSellRate, uint256 rewardFactor)
+    {}
 
     function _orderId(Struct.OrderKey memory key) private pure returns (bytes32) {
         return keccak256(abi.encode(key));
