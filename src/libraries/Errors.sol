@@ -9,6 +9,10 @@ library Errors {
     /// @param currentAccount The invalid account attempting to interact with the order
     error MustBeOwner(address owner, address currentAccount);
 
+    /// @notice Thrown when trying to cancel an already completed order
+    /// @param orderKey They orderKey
+    error CannotModifyCompletedOrder(Struct.OrderKey orderKey);
+
     /// @notice Thrown when trying to submit an order without initializing TWAMM state first
     error NotInitialized();
 
@@ -26,4 +30,14 @@ library Errors {
     /// @notice Thrown when trying to submit an order that's already ongoing
     /// @param orderKey The already existing orderKey
     error OrderAlreadyExists(Struct.OrderKey orderKey);
+
+    /// @notice Thrown when tring to interact with an order that does not exist
+    /// @param orderKey the already existing orderKey
+    error OrderDoesNotExist(Struct.OrderKey orderKey);
+
+    /// @notice Thrown when trying to subtract more value from a long term order than exists
+    /// @param orderKey The orderKey
+    /// @param unsoldAmount The amount still unsold
+    /// @param amountDelta The amount delta for the order
+    error InvalidAmountDelta(Struct.OrderKey orderKey, uint256 unsoldAmount, int256 amountDelta);
 }

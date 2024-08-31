@@ -162,7 +162,7 @@ contract UniqHook is BaseHook, IUniqHook {
             orderKey.expiration,
             orderKey.zeroForOne,
             sellRate,
-            _getOrder(state, orderKey).rewardsFactorLast
+            LongTermOrder.getOrder(state, orderKey).rewardsFactorLast
         );
     }
 
@@ -179,6 +179,37 @@ contract UniqHook is BaseHook, IUniqHook {
         // this call reverts if the caller is not the owner of the order
         (uint256 buyTokensOwed, uint256 sellTokensOwed, uint256 newSellRate, uint256 newRewardFactor) =
             LongTermOrder.updateOrder(state, orderKey, amountDelta);
+
+        if (orderKey.zeroForOne) {
+            tokens0Owed += sellTokensOwed;
+            token1Owed += buyTokensOwed;
+        } else {
+            tokens0Owed += buyTokensOwed;
+            token1Owed += sellTokensOwed;
+        }
+
+        tokensOwed[key.currency0][orderKey.owner] += tokens0Owed;
+        tokensOwed[key.currency1][orderKey.owner] += token1Owed;
+
+        if (amountDelta > 0) {
+            IERC20Minimal(orderKey.zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1))
+                .safeTransferFrom(msg.sender, address(this), uint256(amountDelta));
+        }
+
+        emit UpdateOrder(poolId, orderKey.owner, orderKey.expiration, orderKey.zeroForOne, newSellRate, newRewardFactor);
+    }
+
+    /// @inheritdoc IUniqHook
+    function claimTokens(Currency token, address to, uint256 amountRequested)
+        external
+        returns (uint256 amountTransferred)
+    {
+        uint256 currentBalance = token.balanceOfSelf();
+        amountTransferred = tokensOwed[token][msg.sender];
+        if (amountRequested != 0 && amountRequested < amountTransferred) amountTransferred = amountRequested;
+        if (currentBalance < amountTransferred) amountTransferred = currentBalance;
+        tokensOwed[token][msg.sender] -= amountTransferred;
+        IERC20Minimal(Currency.unwrap(token)).safeTransfer(to, amountTransferred);
     }
 
     /// @inheritdoc IUniqHook
@@ -188,7 +219,7 @@ contract UniqHook is BaseHook, IUniqHook {
         returns (Struct.Order memory)
     {
         console.log("////////////////// Get Order //////////////////");
-        return _getOrder(orderStates[PoolId.wrap(keccak256(abi.encode(key)))], orderKey);
+        return LongTermOrder.getOrder(orderStates[PoolId.wrap(keccak256(abi.encode(key)))], orderKey);
     }
 
     /// @inheritdoc IUniqHook
@@ -211,15 +242,6 @@ contract UniqHook is BaseHook, IUniqHook {
     function _getTWAMM(PoolKey memory key) internal view returns (Struct.OrderState storage) {
         console.log("////////////////// Get TWAMM //////////////////");
         return orderStates[PoolId.wrap(keccak256(abi.encode(key)))];
-    }
-
-    function _getOrder(Struct.OrderState storage state, Struct.OrderKey memory orderKey)
-        internal
-        view
-        returns (Struct.Order storage)
-    {
-        console.log("////////////////// Get Order //////////////////");
-        return state.orders[keccak256(abi.encode(orderKey))];
     }
 
     function _unlockCallback(bytes calldata rawData) internal override returns (bytes memory) {

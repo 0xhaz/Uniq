@@ -16,6 +16,7 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {Struct} from "src/libraries/Struct.sol";
 import {Errors} from "src/libraries/Errors.sol";
 import {console} from "forge-std/Console.sol";
+import {Constants} from "src/libraries/Constants.sol";
 
 /// @notice Library that handles the state and execution of long term orders
 library LongTermOrder {
@@ -385,8 +386,65 @@ library LongTermOrder {
 
     function updateOrder(Struct.OrderState storage self, Struct.OrderKey memory orderKey, int256 amountDelta)
         internal
-        returns (uint256 buyTokensOwed, uint256 sellTokensOwed, uint256 newSellRate, uint256 rewardFactor)
-    {}
+        returns (uint256 buyTokensOwed, uint256 sellTokensOwed, uint256 newSellRate, uint256 rewardFactorLast)
+    {
+        Struct.Order storage order = getOrder(self, orderKey);
+        Struct.OrderPool storage orderPool = orderKey.zeroForOne ? self.orderPool0For1 : self.orderPool1For0;
+
+        if (orderKey.owner != msg.sender) revert Errors.MustBeOwner(orderKey.owner, msg.sender);
+        if (order.sellRate == 0) revert Errors.OrderDoesNotExist(orderKey);
+        if (amountDelta != 0 && orderKey.expiration <= block.timestamp) {
+            revert Errors.CannotModifyCompletedOrder(orderKey);
+        }
+
+        unchecked {
+            uint256 rewardFactor = orderPool.currentRewardFactor - order.rewardsFactorLast;
+            buyTokensOwed = (rewardFactor * order.sellRate) >> FixedPoint96.RESOLUTION;
+            console.log("Buy Tokens Owed: ", buyTokensOwed);
+            rewardFactorLast = orderPool.currentRewardFactor;
+            console.log("Reward Factor Last: ", rewardFactorLast);
+            order.rewardsFactorLast = rewardFactorLast;
+
+            if (orderKey.expiration <= block.timestamp) {
+                delete self.orders[_orderId(orderKey)];
+            }
+
+            if (amountDelta != 0) {
+                uint256 duration = orderKey.expiration - block.timestamp;
+                uint256 unsoldAmount = order.sellRate * duration;
+                if (amountDelta == Constants.MIN_DELTA) amountDelta = -(unsoldAmount.toInt256());
+                int256 newSellAmount = unsoldAmount.toInt256() + amountDelta;
+                if (newSellAmount < 0) revert Errors.InvalidAmountDelta(orderKey, unsoldAmount, amountDelta);
+
+                newSellRate = uint256(newSellAmount) / duration;
+
+                if (amountDelta < 0) {
+                    uint256 sellRateDelta = order.sellRate - newSellRate;
+                    orderPool.currentSellRate -= sellRateDelta;
+                    orderPool.sellRateEndingAtTime[orderKey.expiration] -= sellRateDelta;
+                    sellTokensOwed = uint256(-amountDelta);
+                } else {
+                    uint256 sellRateDelta = newSellRate - order.sellRate;
+                    orderPool.currentSellRate += sellRateDelta;
+                    orderPool.sellRateEndingAtTime[orderKey.expiration] += sellRateDelta;
+                }
+                if (newSellRate == 0) {
+                    delete self.orders[_orderId(orderKey)];
+                } else {
+                    order.sellRate = newSellRate;
+                }
+            }
+        }
+    }
+
+    function getOrder(Struct.OrderState storage state, Struct.OrderKey memory orderKey)
+        internal
+        view
+        returns (Struct.Order storage)
+    {
+        console.log("////////////////// Get Order //////////////////");
+        return state.orders[keccak256(abi.encode(orderKey))];
+    }
 
     function _orderId(Struct.OrderKey memory key) private pure returns (bytes32) {
         return keccak256(abi.encode(key));

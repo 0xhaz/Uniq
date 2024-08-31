@@ -71,9 +71,9 @@ interface IUniqHook {
     /// @param to The recipient of the claim
     /// @param amountRequested The amount of tokens requested to claim. Set to 0 to claim all
     /// @return amountTransferred The total amount to be collected
-    // function claimTokens(Currency token, address to, uint256 amountRequested)
-    //     external
-    //     returns (uint256 amountTransferred);
+    function claimTokens(Currency token, address to, uint256 amountRequested)
+        external
+        returns (uint256 amountTransferred);
 
     /// @notice Executes TWAMM orders on the pool, swapping on the pool itself to make up the difference between the
     /// two TWAMM pools swapping against each other
