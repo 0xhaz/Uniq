@@ -1,327 +1,524 @@
 // // SPDX-License-Identifier: SEE LICENSE IN LICENSE
-// pragma solidity ^0.8.24;
+// pragma solidity ^0.8.25;
 
-// import {FunctionsClient} from "chainlink/contracts/src/v0.8/functions/dev/v1_0_0/FunctionsClient.sol";
-// import {ConfirmedOwner} from "chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
-// import {FunctionsRequest} from "chainlink/contracts/src/v0.8/functions/dev/v1_0_0/libraries/FunctionsRequest.sol";
-// import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-// import {Oracle} from "src/libraries/Oracle.sol";
-// import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
-// import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-// import {RWALib, Positions, RWAAssetData, RWARequest, RWAStatus} from "src/libraries/RWALib.sol";
+// import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
+// import {Hooks} from "v4-core/libraries/Hooks.sol";
+// import {SqrtPriceMath} from "v4-core/libraries/SqrtPriceMath.sol";
+// import {TickBitmap} from "v4-core/libraries/TickBitmap.sol";
+// import {FixedPoint96} from "v4-core/libraries/FixedPoint96.sol";
+// import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
+// import {SafeCast} from "v4-core/libraries/SafeCast.sol";
+// import {IERC20Minimal} from "v4-core/interfaces/external/IERC20Minimal.sol";
+// import {TickMath} from "v4-core/libraries/TickMath.sol";
+// import {TransferHelper} from "src/libraries/TransferHelper.sol";
+// import {IUniqHook} from "src/interfaces/IUniqHook.sol";
+// import {TwammMath} from "src/libraries/TWAMMMath.sol";
+// import {OrderPool} from "src/libraries/OrderPool.sol";
+// import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
+// import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
+// import {PoolGetters} from "src/libraries/PoolGetters.sol";
+// import {PoolKey} from "v4-core/types/PoolKey.sol";
+// import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+// import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
+// import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
+// import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 // import {Constants} from "src/libraries/Constants.sol";
-// import {IUniqRWA} from "src/interfaces/IUniqRWA.sol";
-// import {console2} from "forge-std/console2.sol";
-// import {AggregatorV3Interface} from "chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+// import {Oracle} from "src/libraries/Oracle.sol";
+// import {LongTermOrder} from "src/libraries/LongTermOrder.sol";
+// import {Struct} from "src/libraries/Struct.sol";
+// import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
+// import {BrevisApp, IBrevisProof} from "src/abstracts/brevis/BrevisApp.sol";
+// import {Errors} from "src/libraries/Errors.sol";
+// import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+// import {console} from "forge-std/Console.sol";
 
-// /**
-//  * @title UniqRWA contract
-//  * @notice This contract is used to make request to the broker API to mint RWA-backed tokens
-//  */
-// contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
-//     using FunctionsRequest for FunctionsRequest.Request;
-//     using Oracle for AggregatorV3Interface;
-//     using Strings for uint256;
+// contract UniqHook is BaseHook, IUniqHook, BrevisApp {
+//     using TransferHelper for IERC20Minimal;
+//     using CurrencyLibrary for Currency;
+//     using CurrencySettler for Currency;
+//     using PoolIdLibrary for PoolKey;
+//     using TickMath for int24;
+//     using TickMath for uint160;
+//     using SafeCast for uint256;
+//     using PoolGetters for IPoolManager;
+//     using TickBitmap for mapping(int16 => uint256);
+//     using StateLibrary for IPoolManager;
+//     using LPFeeLibrary for uint24;
+//     using Oracle for Struct.Observation[65535];
 
-//     address functionsRouter;
-//     bytes32 assetName;
-//     string mintSource;
-//     string redeemSource;
-//     uint64 subId;
-//     bytes32 donID;
-//     uint64 secretVersion;
-//     uint8 secretSlot;
-//     address public rwaPriceFeed;
-//     address public usdcPriceFeed;
-//     address public redemptionToken;
-//     uint256 private immutable redemptionTokenDecimals;
-
-//     RWAAssetData[] public assets;
-
-//     //    Mapping of the asset positions and the request ID to the request
-//     mapping(bytes32 => Positions) private positions;
-//     mapping(bytes32 => address) private assetPriceFeed;
-//     // Mapping of requestId to RWARequest
-//     mapping(bytes32 requestId => RWARequest) private requestIdToRequest;
-
-//     constructor(
-//         uint64 subId_,
-//         bytes32 assetName_,
-//         string memory mintSource_,
-//         string memory redeemSource_,
-//         address functionsRouter_,
-//         bytes32 donID_,
-//         address rwaPriceFeed_,
-//         address usdcPriceFeed_,
-//         address redemptionToken_,
-//         uint64 secretVersion_,
-//         uint8 secretSlot_
-//     ) FunctionsClient(functionsRouter_) ConfirmedOwner(msg.sender) ERC20("Backed RWA Token", "bRToken") {
-//         subId = subId_;
-//         assetName = assetName_;
-//         mintSource = mintSource_;
-//         redeemSource = redeemSource_;
-//         functionsRouter = functionsRouter_;
-//         donID = donID_;
-//         rwaPriceFeed = rwaPriceFeed_;
-//         usdcPriceFeed = usdcPriceFeed_;
-//         redemptionToken = redemptionToken_;
-//         redemptionTokenDecimals = ERC20(redemptionToken).decimals();
-//         secretVersion = secretVersion_;
-//         secretSlot = secretSlot_;
-
-//         assets.push(RWAAssetData(assetName_, rwaPriceFeed_));
-//         assetPriceFeed[assetName_] = rwaPriceFeed_;
+//     enum MarketDirection {
+//         Bullish,
+//         Bearish,
+//         Uncertain
 //     }
 
-//     function addAsset(bytes32 asset, address priceFeed) external onlyOwner {
-//         if (priceFeed == address(0) || asset == bytes32(0)) {
-//             revert UniqRWA__AssetNotFound();
-//         }
+//     uint256 public immutable expirationInterval;
+//     bytes32 public vkHash;
+//     uint256 public volatility;
+//     bool uncertainIsBullish;
+//     uint256 numLongTimePeriods;
+//     uint256 numShortTimePeriods;
 
-//         assets.push(RWAAssetData(asset, priceFeed));
-//         assetPriceFeed[asset] = priceFeed;
+//     // keeping track of the moving average gas price
+//     uint128 movingAverageGasPrice;
+//     uint104 movingAverageGasCount;
 
-//         emit AssetAdded(asset, priceFeed);
-//     }
+//     /// @notice The list of observations for a given poolId
+//     mapping(PoolId => Struct.Observation[65535]) public observations;
+//     /// @notice The current observation array state for the pool
+//     mapping(PoolId => Struct.ObservationState) public observationStates;
 
-//     function sendMintRequest(bytes32 asset, uint256 amountTokensToMint)
-//         external
-//         onlyOwner
-//         whenNotPaused
-//         returns (bytes32 requestId)
+//     uint24 public constant BASE_FEE = 200; // 2bps
+//     uint24 public constant HOOK_COMMISSION = 100; // 1bps paid to the hook to cover Brevis costs
+
+//     /// @notice The state of the long term orders
+//     mapping(PoolId => Struct.OrderState) internal orderStates;
+
+//     /// @notice The amount of tokens owed to each user
+//     mapping(Currency => mapping(address => uint256)) public tokensOwed;
+
+//     constructor(IPoolManager poolManager, uint256 expirationInterval_, address brevisProof_)
+//         BaseHook(poolManager)
+//         BrevisApp(IBrevisProof(brevisProof_))
 //     {
-//         // Check if the portfolio has enough collateral to mint new tokens
-//         if (_getCollateralRatioAdjustedBalance(asset, amountTokensToMint) > positions[asset].portfolioBalance) {
-//             revert UniqRWA__NotEnoughCollateral();
-//         }
-
-//         FunctionsRequest.Request memory req;
-
-//         req.initializeRequestForInlineJavaScript(mintSource); // Initialize the request with JS code
-//         req.addDONHostedSecrets(secretSlot, secretVersion);
-
-//         // Send the request and store the request ID
-//         requestId = _sendRequest(req.encodeCBOR(), subId, Constants.GAS_LIMIT, donID);
-
-//         // requestIdToRequestAsset[requestId] = RWARequest(asset, amountTokensToMint, msg.sender, RWAStatus.MINT);
-
-//         requestIdToRequest[requestId] = RWARequest(asset, amountTokensToMint, msg.sender, RWAStatus.MINT);
-
-//         emit MintRequest(requestId, amountTokensToMint);
-//         return requestId;
+//         expirationInterval = expirationInterval_;
 //     }
 
-//     /**
-//      * @notice Sends an HTTP request for character information
-//      * @dev If you pass 0, that will act as a way to get an updated portfolio balance
-//      * @return requestId The ID of the request
-//      */
-//     function sendRedeemRequest(bytes32 asset, uint256 amountBRToken)
+//     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+//         return Hooks.Permissions({
+//             beforeInitialize: true,
+//             afterInitialize: true,
+//             beforeAddLiquidity: true,
+//             beforeRemoveLiquidity: true,
+//             afterAddLiquidity: false,
+//             afterRemoveLiquidity: false,
+//             beforeSwap: true,
+//             afterSwap: false,
+//             beforeDonate: false,
+//             afterDonate: false,
+//             beforeSwapReturnDelta: false,
+//             afterSwapReturnDelta: false,
+//             afterAddLiquidityReturnDelta: false,
+//             afterRemoveLiquidityReturnDelta: false
+//         });
+//     }
+
+//     function beforeInitialize(address, PoolKey calldata key, uint160, bytes calldata)
 //         external
 //         override
-//         whenNotPaused
-//         returns (bytes32 requestId)
+//         onlyByPoolManager
+//         returns (bytes4)
 //     {
-//         // TODO: Check for potential exploit
-//         uint256 amountRWAInUSDC = getUsdcValueofUsd(getUsdValueOfAsset(asset, amountBRToken));
-//         if (amountRWAInUSDC < Constants.MIN_REDEMPTION_PRICE) {
-//             revert UniqRWA__BelowMinimumRedemption();
+//         int24 maxTickSpacing = type(int16).max;
+
+//         if (!key.fee.isDynamicFee() || key.tickSpacing != maxTickSpacing) {
+//             revert Errors.MustUseDynamicFee();
 //         }
 
-//         FunctionsRequest.Request memory req;
-//         req.initializeRequestForInlineJavaScript(redeemSource);
-//         string[] memory args = new string[](2);
-//         // The transaction will fail if it's outside of 2% slippage
-//         // This could be a future improvement to make slippage a parameter
-//         args[0] = amountBRToken.toString();
-//         args[1] = amountRWAInUSDC.toString();
-//         req.setArgs(args);
+//         LongTermOrder.initialize(_getTWAMM(key));
 
-//         // Send the request and store the request ID
-//         requestId = _sendRequest(req.encodeCBOR(), subId, Constants.GAS_LIMIT, donID);
-//         requestIdToRequest[requestId] = RWARequest(asset, amountBRToken, msg.sender, RWAStatus.REDEEM);
-
-//         _burn(msg.sender, amountBRToken);
+//         return this.beforeInitialize.selector;
 //     }
 
-//     function setSecretVersion(uint64 _secretVersion) external override {
-//         secretVersion = _secretVersion;
-//     }
-
-//     function setSecretSlot(uint8 _secretSlot) external override {
-//         secretSlot = _secretSlot;
-//     }
-
-//     function withdraw(bytes32 asset) external override whenNotPaused {
-//         uint256 amountToWithdraw = positions[asset].userToWithdrawAmount[msg.sender];
-//         positions[asset].userToWithdrawAmount[msg.sender] = 0;
-
-//         bool success = ERC20(redemptionToken).transfer(msg.sender, amountToWithdraw);
-//         if (!success) {
-//             revert UniqRWA__RedemptionFailed();
-//         }
-//     }
-
-//     function pause() external override onlyOwner {
-//         _pause();
-//     }
-
-//     function unpause() external override onlyOwner {
-//         _unpause();
-//     }
-
-//     /*//////////////////////////////////////////////////////////////
-//                         INTERNAL FUNCTIONS
-//     //////////////////////////////////////////////////////////////*/
-
-//     /**
-//      * @notice Adjusts the total balance of the portfolio to account for the collateral ratio
-//      * @param amountTokensToMint The amount of tokens to mint
-//      * @return The amount of tokens to mint
-//      * @dev This function is used to check if the portfolio has enough collateral to mint new tokens
-//      */
-//     function _getCollateralRatioAdjustedBalance(bytes32 asset, uint256 amountTokensToMint)
-//         internal
-//         view
-//         returns (uint256)
-//     {
-//         uint256 newValue = getCalculatedNewTotalValue(asset, amountTokensToMint);
-//         return (newValue * Constants.COLLATERAL_RATIO) / Constants.COLLATERAL_PRECISION;
-//     }
-
-//     /**
-//      * @notice Callback function for fulfilling Chainlink requests
-//      * @param requestId The request ID
-//      * @param response The response of the request
-//      */
-//     function fulfillRequest(bytes32 requestId, bytes memory response, bytes memory /*err*/ )
-//         internal
+//     function afterInitialize(address, PoolKey calldata key, uint160, int24, bytes calldata)
+//         external
 //         override
-//         whenNotPaused
+//         onlyByPoolManager
+//         returns (bytes4)
 //     {
-//         uint256 newPortfolioBalance = abi.decode(response, (uint256));
-//         // uint256 newPortfolioBalance = abi.decode(response, (uint256));
-//         // console2.logBytes32(requestId);
+//         PoolId id = key.toId();
+//         (observationStates[id].cardinality, observationStates[id].cardinalityNext) =
+//             observations[id].initialize(_blockTimestamp());
+//         return this.afterInitialize.selector;
+//     }
 
-//         // bytes32 asset = requestIdToRequestAsset[requestId].asset;
+//     function beforeAddLiquidity(
+//         address,
+//         PoolKey calldata key,
+//         IPoolManager.ModifyLiquidityParams calldata params,
+//         bytes calldata
+//     ) external override onlyByPoolManager returns (bytes4) {
+//         int24 maxTickSpacing = type(int16).max;
+//         if (
+//             params.tickLower != TickMath.minUsableTick(maxTickSpacing)
+//                 || params.tickUpper != TickMath.maxUsableTick(maxTickSpacing)
+//         ) {
+//             revert Errors.OraclePositionMustBeFullRange();
+//         }
+//         executeTWAMMOrders(key);
+//         _updatePool(key);
+//         return this.beforeAddLiquidity.selector;
+//     }
 
-//         bytes32 asset = requestIdToRequest[requestId].asset;
+//     function beforeRemoveLiquidity(
+//         address,
+//         PoolKey calldata,
+//         IPoolManager.ModifyLiquidityParams calldata,
+//         bytes calldata
+//     ) external view override onlyByPoolManager returns (bytes4) {
+//         return this.beforeRemoveLiquidity.selector;
+//     }
 
-//         positions[asset].portfolioBalance = newPortfolioBalance;
+//     function beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata)
+//         external
+//         override
+//         onlyByPoolManager
+//         returns (bytes4, BeforeSwapDelta, uint24)
+//     {
+//         _updatePool(key);
+//         executeTWAMMOrders(key);
 
-//         if (requestIdToRequest[requestId].status == RWAStatus.MINT) {
-//             _mintFulFillRequest(requestId, newPortfolioBalance);
+//         // calculate dynamic fee based on volatility
+//         uint24 dynamicFee = calculateFee(abs(params.amountSpecified));
+
+//         dynamicFee = dynamicFee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
+
+//         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, dynamicFee);
+//     }
+
+//     ///////////////////////////////////////////////////////////////////////
+//     ///                     Public Functions                            ///
+//     ///////////////////////////////////////////////////////////////////////
+//     /// @inheritdoc IUniqHook
+//     function executeTWAMMOrders(PoolKey memory key) public {
+//         console.log("////////////////// Execute TWAMM Orders //////////////////");
+//         PoolId id = key.toId();
+//         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(id);
+//         Struct.OrderState storage state = orderStates[id];
+
+//         (bool zeroForOne, uint160 sqrtPriceLimitX96) = LongTermOrder.executeOrders(
+//             state,
+//             poolManager,
+//             key,
+//             Struct.ExecutePool({sqrtPriceX96: sqrtPriceX96, liquidity: poolManager.getLiquidity(id)}),
+//             expirationInterval
+//         );
+
+//         if (sqrtPriceLimitX96 != 0 && sqrtPriceLimitX96 != sqrtPriceX96) {
+//             poolManager.unlock(
+//                 abi.encode(key, IPoolManager.SwapParams(zeroForOne, type(int256).max, sqrtPriceLimitX96))
+//             );
+//         }
+//     }
+
+//     function getLastVirtualOrder(PoolId key) public view returns (uint256) {
+//         return orderStates[key].lastVirtualOrderTime;
+//     }
+
+//     ///////////////////////////////////////////////////////////////////////
+//     ///                     External Functions                          ///
+//     ///////////////////////////////////////////////////////////////////////
+//     /// @inheritdoc IUniqHook
+//     function submitOrder(PoolKey calldata key, Struct.OrderKey memory orderKey, uint256 amountIn)
+//         external
+//         returns (bytes32 orderId)
+//     {
+//         console.log("////////////////// Submit Order //////////////////");
+//         PoolId id = PoolId.wrap(keccak256(abi.encode(key)));
+//         Struct.OrderState storage state = orderStates[id];
+//         executeTWAMMOrders(key);
+
+//         uint256 sellRate;
+//         unchecked {
+//             uint256 duration = orderKey.expiration - block.timestamp;
+//             sellRate = amountIn / duration;
+//             orderId = LongTermOrder.submitOrder(state, orderKey, sellRate, expirationInterval);
+//             IERC20Minimal(orderKey.zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1))
+//                 .safeTransferFrom(msg.sender, address(this), sellRate * duration);
+//         }
+
+//         emit SubmitOrder(
+//             id,
+//             orderKey.owner,
+//             orderKey.expiration,
+//             orderKey.zeroForOne,
+//             sellRate,
+//             LongTermOrder.getOrder(state, orderKey).rewardsFactorLast
+//         );
+//     }
+
+//     /// @inheritdoc IUniqHook
+//     function updateOrder(PoolKey memory key, Struct.OrderKey memory orderKey, int256 amountDelta)
+//         external
+//         returns (uint256 tokens0Owed, uint256 token1Owed)
+//     {
+//         PoolId poolId = PoolId.wrap(keccak256(abi.encode(key)));
+//         Struct.OrderState storage state = orderStates[poolId];
+
+//         executeTWAMMOrders(key);
+
+//         // this call reverts if the caller is not the owner of the order
+//         (uint256 buyTokensOwed, uint256 sellTokensOwed, uint256 newSellRate, uint256 newRewardFactor) =
+//             LongTermOrder.updateOrder(state, orderKey, amountDelta);
+
+//         if (orderKey.zeroForOne) {
+//             tokens0Owed += sellTokensOwed;
+//             token1Owed += buyTokensOwed;
 //         } else {
-//             _redeemFulFillRequest(requestId, response);
+//             tokens0Owed += buyTokensOwed;
+//             token1Owed += sellTokensOwed;
 //         }
+
+//         tokensOwed[key.currency0][orderKey.owner] += tokens0Owed;
+//         tokensOwed[key.currency1][orderKey.owner] += token1Owed;
+
+//         if (amountDelta > 0) {
+//             IERC20Minimal(orderKey.zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1))
+//                 .safeTransferFrom(msg.sender, address(this), uint256(amountDelta));
+//         }
+
+//         emit UpdateOrder(poolId, orderKey.owner, orderKey.expiration, orderKey.zeroForOne, newSellRate, newRewardFactor);
 //     }
 
-//     function _mintFulFillRequest(bytes32 requestId, uint256 newPortfolioBalance) internal {
-//         // bytes32 asset = requestIdToRequestAsset[requestId].asset;
-
-//         bytes32 asset = requestIdToRequest[requestId].asset;
-
-//         uint256 amountOfTokensToMint = requestIdToRequest[requestId].amountOfToken;
-
-//         if (_getCollateralRatioAdjustedBalance(asset, amountOfTokensToMint) > newPortfolioBalance) {
-//             revert UniqRWA__NotEnoughCollateral();
-//         }
-
-//         // address assetToken = assetToToken[asset];
-
-//         if (amountOfTokensToMint != 0) {
-//             _mint(requestIdToRequest[requestId].requester, amountOfTokensToMint);
-//         }
-//     }
-
-//     /*
-//      * @notice the callback for the redeem request
-//      * At this point, USDC should be in this contract, and we need to update the user
-//      * That they can now withdraw their USDC
-//      *
-//      * @param requestId The ID of the request to fulfill
-//      * @param response The response from the request, it'll be the amount of USDC that was sent
-//      */
-//     function _redeemFulFillRequest(bytes32 requestId, bytes memory response) internal {
-//         bytes32 asset = requestIdToRequest[requestId].asset;
-
-//         uint256 amountOfUSDC = abi.decode(response, (uint256));
-//         uint256 amountOfUSDCWAD;
-
-//         if (redemptionTokenDecimals < 18) {
-//             amountOfUSDCWAD = amountOfUSDC * (10 ** (18 - redemptionTokenDecimals));
-//         }
-//         if (amountOfUSDC == 0) {
-//             uint256 amountOfRWABurned = requestIdToRequest[requestId].amountOfToken;
-//             _mint(requestIdToRequest[asset].requester, amountOfRWABurned);
-//             return;
-//         }
-
-//         positions[asset].userToWithdrawAmount[requestIdToRequest[requestId].requester] = amountOfUSDCWAD;
-//     }
-
-//     /*//////////////////////////////////////////////////////////////
-//                             VIEW FUNCTIONS
-//     //////////////////////////////////////////////////////////////*/
-
-//     function getAssetPrice(bytes32 assetAddress) public view returns (uint256) {
-//         address assetPriceFeed_ = assetPriceFeed[assetAddress];
-
-//         AggregatorV3Interface priceFeed = AggregatorV3Interface(assetPriceFeed_);
-
-//         (, int256 price,,,) = priceFeed.staleCheckLatestRoundData();
-//         return uint256(price) * Constants.ADDITIONAL_FEED_PRECISION;
-//     }
-
-//     function getCalculatedNewTotalValue(bytes32 asset, uint256 addedNumberOfAsset)
-//         public
-//         view
-//         override
-//         returns (uint256)
+//     /// @inheritdoc IUniqHook
+//     function claimTokens(Currency token, address to, uint256 amountRequested)
+//         external
+//         returns (uint256 amountTransferred)
 //     {
-//         return ((totalSupply() + addedNumberOfAsset) * getAssetPrice(asset)) / Constants.PRECISION;
+//         uint256 currentBalance = token.balanceOfSelf();
+//         amountTransferred = tokensOwed[token][msg.sender];
+//         if (amountRequested != 0 && amountRequested < amountTransferred) amountTransferred = amountRequested;
+//         if (currentBalance < amountTransferred) amountTransferred = currentBalance;
+//         tokensOwed[token][msg.sender] -= amountTransferred;
+//         IERC20Minimal(Currency.unwrap(token)).safeTransfer(to, amountTransferred);
 //     }
 
-//     function getAssetsData() public view returns (bytes32[] memory, address[] memory) {
-//         uint256 len = assets.length;
-//         bytes32[] memory asset = new bytes32[](len);
-//         address[] memory priceFeed = new address[](len);
+//     /// @inheritdoc IUniqHook
+//     function getOrder(PoolKey calldata key, Struct.OrderKey calldata orderKey)
+//         external
+//         view
+//         returns (Struct.Order memory)
+//     {
+//         console.log("////////////////// Get Order //////////////////");
+//         return LongTermOrder.getOrder(orderStates[PoolId.wrap(keccak256(abi.encode(key)))], orderKey);
+//     }
 
-//         for (uint256 i; i < len; ++i) {
-//             asset[i] = assets[i].asset;
-//             priceFeed[i] = assets[i].priceFeed;
+//     /// @inheritdoc IUniqHook
+//     function getOrderPool(PoolKey calldata key, bool zeroForOne)
+//         external
+//         view
+//         returns (uint256 currentSellRate, uint256 currentRewardFactor)
+//     {
+//         console.log("////////////////// Get Order Pool //////////////////");
+//         Struct.OrderState storage state = _getTWAMM(key);
+//         return zeroForOne
+//             ? (state.orderPool0For1.currentSellRate, state.orderPool0For1.currentRewardFactor)
+//             : (state.orderPool1For0.currentSellRate, state.orderPool1For0.currentRewardFactor);
+//     }
+
+//     function updateMovingAverage() external returns (uint128) {
+//         uint128 gasPrice = uint128(tx.gasprice);
+
+//         // New Average = ((Old Average * # of Txns Tracked) + Current Gas Price) / (# of Txns Tracked + 1)
+//         movingAverageGasPrice =
+//             uint128((movingAverageGasPrice * movingAverageGasCount + gasPrice) / (movingAverageGasCount + 1));
+
+//         // Increment the number of transactions tracked
+//         movingAverageGasCount++;
+
+//         return movingAverageGasPrice;
+//     }
+
+//     ///////////////////////////////////////////////////////////////////////
+//     ///                     Internal Functions                          ///
+//     ///////////////////////////////////////////////////////////////////////
+
+//     function _getTWAMM(PoolKey memory key) internal view returns (Struct.OrderState storage) {
+//         console.log("////////////////// Get TWAMM //////////////////");
+//         return orderStates[PoolId.wrap(keccak256(abi.encode(key)))];
+//     }
+
+//     function _unlockCallback(bytes calldata rawData) internal override returns (bytes memory) {
+//         console.log("////////////////// Unlock Callback //////////////////");
+//         (PoolKey memory key, IPoolManager.SwapParams memory swapParams) =
+//             abi.decode(rawData, (PoolKey, IPoolManager.SwapParams));
+
+//         BalanceDelta delta = poolManager.swap(key, swapParams, Constants.ZERO_BYTES);
+
+//         if (swapParams.zeroForOne) {
+//             if (delta.amount0() < 0) {
+//                 key.currency0.settle(poolManager, address(this), uint256(uint128(-delta.amount0())), false);
+//             }
+//             if (delta.amount1() > 0) {
+//                 key.currency1.take(poolManager, address(this), uint256(uint128(delta.amount1())), false);
+//             }
+//         } else {
+//             if (delta.amount1() < 0) {
+//                 key.currency1.settle(poolManager, address(this), uint256(uint128(-delta.amount1())), false);
+//             }
+//             if (delta.amount0() > 0) {
+//                 key.currency0.take(poolManager, address(this), uint256(uint128(delta.amount0())), false);
+//             }
+//         }
+//         return bytes("");
+//     }
+
+//     function brevisCommission(PoolKey calldata key, IPoolManager.SwapParams calldata swapParams) internal {
+//         uint256 tokenAmount =
+//             swapParams.amountSpecified < 0 ? uint256(-swapParams.amountSpecified) : uint256(swapParams.amountSpecified);
+
+//         uint256 fee = Math.mulDiv(tokenAmount, HOOK_COMMISSION, 10_000);
+
+//         // determine inbound token based on 0 or 1 or 1 or 0 swap
+//         Currency inboundToken = swapParams.zeroForOne ? key.currency0 : key.currency1;
+
+//         // take the inbound token from PoolManager, debt is paid by the swapper via swap router
+//         // inboud token is added to hook's reserves
+//         poolManager.take(inboundToken, address(this), fee);
+//     }
+
+//     /// @notice This function takes in parameters necessary to retrieve historical data, calculate moving averages and volatility
+
+//     ///////////////////////////////////////////////////////////////////////
+//     ///                     Brevis Override Functions                   ///
+//     ///////////////////////////////////////////////////////////////////////
+//     function handleProofResult(bytes32, bytes32 vkHash_, bytes calldata circuitOutput_) internal override {
+//         if (vkHash != vkHash_) revert Errors.InvalidVkHash();
+
+//         volatility = decodeOutput(circuitOutput_);
+
+//         emit UpdateVolatility(volatility);
+//     }
+
+//     function decodeOutput(bytes calldata output) internal pure returns (uint256) {
+//         uint248 vol = uint248(bytes31(output[0:31])); // vol is output as uint248 (31 bytes)
+
+//         return uint256(vol);
+//     }
+
+//     function setVkHash(bytes32 vkHash_) external {
+//         vkHash = vkHash_;
+//     }
+
+//     function calculateFee(uint256 vol) private view returns (uint24) {
+//         uint256 constant_factor = 1e26; //
+//         uint256 variableFee = sqrt(vol) * volatility / constant_factor;
+//         // sqrt(vol) * vol / 1e26
+//         return uint24(BASE_FEE + variableFee);
+//     }
+
+//     function getFee(int256 amount) external view returns (uint24) {
+//         return calculateFee(abs(amount));
+//     }
+
+//     function abs(int256 x) private pure returns (uint256) {
+//         return x >= 0 ? uint256(x) : uint256(-x);
+//     }
+
+//     function sqrt(uint256 x) internal pure returns (uint256) {
+//         if (x == 0) return 0;
+
+//         uint256 z = (x + 1) / 2;
+//         uint256 y = x;
+
+//         while (z < y) {
+//             y = z;
+//             z = (x / z + z) / 2;
 //         }
 
-//         return (asset, priceFeed);
+//         return y;
 //     }
 
-//     function getPortfolioBalance(bytes32 asset) public view returns (uint256) {
-//         return positions[asset].portfolioBalance;
+//     /// @notice Returns the observation for the given poolId and index
+//     function getObservation(PoolKey calldata key, uint256 index)
+//         external
+//         view
+//         returns (Struct.Observation memory observation)
+//     {
+//         observation = observations[PoolId.wrap(keccak256(abi.encode(key)))][index];
 //     }
 
-//     function getUsdcPrice() public view override returns (uint256) {
-//         AggregatorV3Interface priceFeed = AggregatorV3Interface(usdcPriceFeed);
-
-//         (, int256 price,,,) = priceFeed.staleCheckLatestRoundData();
-//         return uint256(price) * Constants.ADDITIONAL_FEED_PRECISION;
+//     /// @notice Returns the state for the given pool key
+//     function getState(PoolKey calldata key) external view returns (Struct.ObservationState memory state) {
+//         state = observationStates[PoolId.wrap(keccak256(abi.encode(key)))];
 //     }
 
-//     function getUsdValueOfAsset(bytes32 asset, uint256 rwaAmount) public view returns (uint256) {
-//         return (rwaAmount * getAssetPrice(asset)) / Constants.PRECISION;
+//     /// @dev For mocking
+//     function _blockTimestamp() internal view virtual returns (uint32) {
+//         return uint32(block.timestamp);
 //     }
 
-//     function getUsdcValueofUsd(uint256 usdcValue) public view returns (uint256) {
-//         return (usdcValue * Constants.PRECISION) / getUsdcPrice();
+//     /// @notice observe the given pool for the timestamps
+//     function observe(PoolKey calldata key, uint32[] calldata secondsAgos)
+//         external
+//         view
+//         returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
+//     {
+//         PoolId id = key.toId();
+//         Struct.ObservationState memory state = observationStates[id];
+//         (, int24 tick,,) = poolManager.getSlot0(id);
+
+//         uint128 liquidity = poolManager.getLiquidity(id);
+
+//         return observations[id].observe(_blockTimestamp(), secondsAgos, tick, state.index, liquidity, state.cardinality);
 //     }
 
-//     // function getTotalUsdValue(bytes32 asset) external view returns (uint256) {}
+//     /// @dev Called before any action that potentially modifies pool price or liquidity, such as swap or modify positions
+//     function _updatePool(PoolKey calldata key) private {
+//         PoolId id = key.toId();
+//         (, int24 tick,,) = poolManager.getSlot0(id);
 
-//     function getRequest(bytes32 requestId) external view override returns (RWARequest memory) {
-//         return requestIdToRequest[requestId];
+//         uint128 liqudity = poolManager.getLiquidity(id);
+
+//         (observationStates[id].index, observationStates[id].cardinality) = observations[id].write(
+//             observationStates[id].index,
+//             _blockTimestamp(),
+//             tick,
+//             liqudity,
+//             observationStates[id].cardinality,
+//             observationStates[id].cardinalityNext
+//         );
 //     }
 
-//     function getWithdrawalAmount(bytes32 asset, address user) external view override returns (uint256) {
-//         return positions[asset].userToWithdrawAmount[user];
+//     function calculateMMA(uint256[] memory shortTimePeriods, uint256[] memory longTimePeriods)
+//         public
+//         pure
+//         returns (MarketDirection)
+//     {
+//         require(shortTimePeriods.length > 0 && longTimePeriods.length > 0, "Invalid time periods");
+
+//         uint256 minS = shortTimePeriods[0];
+//         uint256 maxS = shortTimePeriods[0];
+//         for (uint256 i = 1; i < shortTimePeriods.length; i++) {
+//             if (shortTimePeriods[i] < minS) {
+//                 minS = shortTimePeriods[i];
+//             }
+//             if (shortTimePeriods[i] > maxS) {
+//                 maxS = shortTimePeriods[i];
+//             }
+//         }
+
+//         uint256 minL = longTimePeriods[0];
+//         uint256 maxL = longTimePeriods[0];
+//         for (uint256 i = 1; i < longTimePeriods.length; i++) {
+//             if (longTimePeriods[i] < minL) {
+//                 minL = longTimePeriods[i];
+//             }
+//             if (longTimePeriods[i] > maxL) {
+//                 maxL = longTimePeriods[i];
+//             }
+//         }
+
+//         if (minS > maxL) {
+//             return MarketDirection.Bullish;
+//         } else if (maxS < minL) {
+//             return MarketDirection.Bearish;
+//         } else {
+//             return MarketDirection.Uncertain;
+//         }
+//     }
+
+//     function updateVolatility(uint256[] memory S, uint256[] memory L) public returns (uint256) {
+//         MarketDirection direction = calculateMMA(S, L);
+
+//         if (direction == MarketDirection.Bullish) {
+//             volatility = 5; // 0.5bps
+//         } else if (direction == MarketDirection.Bearish) {
+//             volatility = 20; // 2bps
+//         } else {
+//             volatility = 10; // 1bps
+//         }
+
+//         return volatility;
 //     }
 // }

@@ -2,6 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {AggregatorV3Interface} from "chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import {Errors} from "src/libraries/Errors.sol";
+import {Struct} from "src/libraries/Struct.sol";
 
 /**
  * @title Oracle Library
@@ -10,27 +12,6 @@ import {AggregatorV3Interface} from "chainlink/contracts/src/v0.8/interfaces/Agg
  * The DSCEngine will freeze if the price is stale
  */
 library Oracle {
-    error Oracle__StalePrice();
-    error Oracle__CardinalityCannotBeZero();
-
-    /// @notice Thrown when trying to observe a price that is older than the oldest recorded price
-    /// @param oldestTimestamp Timestamp of the oldest remaining observation
-    /// @param targetTimestamp Invalid timestamp targeted to be observed
-    error Oracle__TargetPredatesOldestObservation(uint32 oldestTimestamp, uint32 targetTimestamp);
-
-    /// @notice Struct to hold the observation data
-    /// @member blockTimestamp The block timestamp of the observation
-    /// @member tickCumulative The tick accumulator, i.e tick * time elapsed since the pool was first initialized
-    /// @member secondsPerLiquidityCumulativeX128 The seconds per liquidity, i.e seconds elapsed / max(1, liquidity)
-    /// since the pool was first initialized
-    /// @member initialized True if the observation is initialized
-    struct Observation {
-        uint32 blockTimestamp;
-        int56 tickCumulative;
-        uint160 secondsPerLiquidityCumulativeX128;
-        bool initialized;
-    }
-
     uint256 private constant TIMEOUT = 3 hours;
 
     function staleCheckLatestRoundData(AggregatorV3Interface chainlinkFeed)
@@ -42,10 +23,10 @@ library Oracle {
             chainlinkFeed.latestRoundData();
 
         if (updatedAt == 0 || answeredInRound < roundId) {
-            revert Oracle__StalePrice();
+            revert Errors.Oracle__StalePrice();
         }
         uint256 secondsSince = block.timestamp - updatedAt;
-        if (secondsSince > TIMEOUT) revert Oracle__StalePrice();
+        if (secondsSince > TIMEOUT) revert Errors.Oracle__StalePrice();
 
         return (roundId, answer, startedAt, updatedAt, answeredInRound);
     }
@@ -54,23 +35,21 @@ library Oracle {
         return TIMEOUT;
     }
 
-    /// @notice Transforms a previous observation into a new observation, given the passage of time and the current
-    /// tick and liquidity values
-    /// @dev blockTimestamp must be chronologically equal to or greater than last.blockTimestamp,
-    /// safe for 0 or 1 overflows
-    /// @param last The specified observation to be transferred
+    /// @notice Transforms a previous observation into a new observation, given the passage of time and the current tick and liquidity values
+    /// @dev blockTimestamp _must_ be chronologically equal to or greater than last.blockTimestamp, safe for 0 or 1 overflows
+    /// @param last The specified observation to be transformed
     /// @param blockTimestamp The timestamp of the new observation
     /// @param tick The active tick at the time of the new observation
     /// @param liquidity The total in-range liquidity at the time of the new observation
-    /// @return observation The new observation populated
-    function transform(Observation memory last, uint32 blockTimestamp, int24 tick, uint128 liquidity)
+    /// @return Observation The newly populated observation
+    function transform(Struct.Observation memory last, uint32 blockTimestamp, int24 tick, uint128 liquidity)
         private
         pure
-        returns (Observation memory)
+        returns (Struct.Observation memory)
     {
         unchecked {
             uint32 delta = blockTimestamp - last.blockTimestamp;
-            return Observation({
+            return Struct.Observation({
                 blockTimestamp: blockTimestamp,
                 tickCumulative: last.tickCumulative + int56(tick) * int56(uint56(delta)),
                 secondsPerLiquidityCumulativeX128: last.secondsPerLiquidityCumulativeX128
@@ -80,16 +59,16 @@ library Oracle {
         }
     }
 
-    /// @notice Initialize the oracle array by writing the first slot.
-    /// Called once for the lifecycle of the observations array
+    /// @notice Initialize the oracle array by writing the first slot. Called once for the lifecycle of the observations array
     /// @param self The stored oracle array
+    /// @param time The time of the oracle initialization, via block.timestamp truncated to uint32
     /// @return cardinality The number of populated elements in the oracle array
     /// @return cardinalityNext The new length of the oracle array, independent of population
-    function initialize(Observation[65535] storage self, uint32 time)
+    function initialize(Struct.Observation[65535] storage self, uint32 time)
         internal
         returns (uint16 cardinality, uint16 cardinalityNext)
     {
-        self[0] = Observation({
+        self[0] = Struct.Observation({
             blockTimestamp: time,
             tickCumulative: 0,
             secondsPerLiquidityCumulativeX128: 0,
@@ -112,7 +91,7 @@ library Oracle {
     /// @return indexUpdated The new index of the most recently written element in the oracle array
     /// @return cardinalityUpdated The new cardinality of the oracle array
     function write(
-        Observation[65535] storage self,
+        Struct.Observation[65535] storage self,
         uint16 index,
         uint32 blockTimestamp,
         int24 tick,
@@ -121,7 +100,7 @@ library Oracle {
         uint16 cardinalityNext
     ) internal returns (uint16 indexUpdated, uint16 cardinalityUpdated) {
         unchecked {
-            Observation memory last = self[index];
+            Struct.Observation memory last = self[index];
 
             // early return if we've already written an observation this block
             if (last.blockTimestamp == blockTimestamp) return (index, cardinality);
@@ -143,9 +122,9 @@ library Oracle {
     /// @param current The current next cardinality of the oracle array
     /// @param next The proposed next cardinality which will be populated in the oracle array
     /// @return next The next cardinality which will be populated in the oracle array
-    function grow(Observation[65535] storage self, uint16 current, uint16 next) internal returns (uint16) {
+    function grow(Struct.Observation[65535] storage self, uint16 current, uint16 next) internal returns (uint16) {
         unchecked {
-            if (current == 0) revert Oracle__CardinalityCannotBeZero();
+            if (current == 0) revert Errors.OracleCardinalityCannotBeZero();
             // no-op if the passed next value isn't greater than the current next value
             if (next <= current) return current;
             // store in each slot to prevent fresh SSTOREs in swaps
@@ -186,11 +165,13 @@ library Oracle {
     /// @param cardinality The number of populated elements in the oracle array
     /// @return beforeOrAt The observation recorded before, or at, the target
     /// @return atOrAfter The observation recorded at, or after, the target
-    function binarySearch(Observation[65535] storage self, uint32 time, uint32 target, uint16 index, uint16 cardinality)
-        private
-        view
-        returns (Observation memory beforeOrAt, Observation memory atOrAfter)
-    {
+    function binarySearch(
+        Struct.Observation[65535] storage self,
+        uint32 time,
+        uint32 target,
+        uint16 index,
+        uint16 cardinality
+    ) private view returns (Struct.Observation memory beforeOrAt, Struct.Observation memory atOrAfter) {
         unchecked {
             uint256 l = (index + 1) % cardinality; // oldest observation
             uint256 r = l + cardinality - 1; // newest observation
@@ -232,14 +213,14 @@ library Oracle {
     /// @return beforeOrAt The observation which occurred at, or before, the given timestamp
     /// @return atOrAfter The observation which occurred at, or after, the given timestamp
     function getSurroundingObservations(
-        Observation[65535] storage self,
+        Struct.Observation[65535] storage self,
         uint32 time,
         uint32 target,
         int24 tick,
         uint16 index,
         uint128 liquidity,
         uint16 cardinality
-    ) private view returns (Observation memory beforeOrAt, Observation memory atOrAfter) {
+    ) private view returns (Struct.Observation memory beforeOrAt, Struct.Observation memory atOrAfter) {
         unchecked {
             // optimistically set before to the newest observation
             beforeOrAt = self[index];
@@ -261,7 +242,7 @@ library Oracle {
 
             // ensure that the target is chronologically at or after the oldest observation
             if (!lte(time, beforeOrAt.blockTimestamp, target)) {
-                revert Oracle__TargetPredatesOldestObservation(beforeOrAt.blockTimestamp, target);
+                revert Errors.TargetPredatesOldestObservation(beforeOrAt.blockTimestamp, target);
             }
 
             // if we've reached this point, we have to binary search
@@ -283,7 +264,7 @@ library Oracle {
     /// @return tickCumulative The tick * time elapsed since the pool was first initialized, as of `secondsAgo`
     /// @return secondsPerLiquidityCumulativeX128 The time elapsed / max(1, liquidity) since the pool was first initialized, as of `secondsAgo`
     function observeSingle(
-        Observation[65535] storage self,
+        Struct.Observation[65535] storage self,
         uint32 time,
         uint32 secondsAgo,
         int24 tick,
@@ -293,14 +274,14 @@ library Oracle {
     ) internal view returns (int56 tickCumulative, uint160 secondsPerLiquidityCumulativeX128) {
         unchecked {
             if (secondsAgo == 0) {
-                Observation memory last = self[index];
+                Struct.Observation memory last = self[index];
                 if (last.blockTimestamp != time) last = transform(last, time, tick, liquidity);
                 return (last.tickCumulative, last.secondsPerLiquidityCumulativeX128);
             }
 
             uint32 target = time - secondsAgo;
 
-            (Observation memory beforeOrAt, Observation memory atOrAfter) =
+            (Struct.Observation memory beforeOrAt, Struct.Observation memory atOrAfter) =
                 getSurroundingObservations(self, time, target, tick, index, liquidity, cardinality);
 
             if (target == beforeOrAt.blockTimestamp) {
@@ -343,7 +324,7 @@ library Oracle {
     /// @return tickCumulatives The tick * time elapsed since the pool was first initialized, as of each `secondsAgo`
     /// @return secondsPerLiquidityCumulativeX128s The cumulative seconds / max(1, liquidity) since the pool was first initialized, as of each `secondsAgo`
     function observe(
-        Observation[65535] storage self,
+        Struct.Observation[65535] storage self,
         uint32 time,
         uint32[] memory secondsAgos,
         int24 tick,
@@ -352,7 +333,7 @@ library Oracle {
         uint16 cardinality
     ) internal view returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s) {
         unchecked {
-            if (cardinality == 0) revert Oracle__CardinalityCannotBeZero();
+            if (cardinality == 0) revert Errors.OracleCardinalityCannotBeZero();
 
             tickCumulatives = new int56[](secondsAgos.length);
             secondsPerLiquidityCumulativeX128s = new uint160[](secondsAgos.length);

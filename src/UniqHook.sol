@@ -26,9 +26,13 @@ import {Constants} from "src/libraries/Constants.sol";
 import {Oracle} from "src/libraries/Oracle.sol";
 import {LongTermOrder} from "src/libraries/LongTermOrder.sol";
 import {Struct} from "src/libraries/Struct.sol";
+import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
+import {BrevisApp, IBrevisProof} from "src/abstracts/brevis/BrevisApp.sol";
+import {Errors} from "src/libraries/Errors.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {console} from "forge-std/Console.sol";
 
-contract UniqHook is BaseHook, IUniqHook {
+contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     using TransferHelper for IERC20Minimal;
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
@@ -39,8 +43,32 @@ contract UniqHook is BaseHook, IUniqHook {
     using PoolGetters for IPoolManager;
     using TickBitmap for mapping(int16 => uint256);
     using StateLibrary for IPoolManager;
+    using LPFeeLibrary for uint24;
+    using Oracle for Struct.Observation[65535];
+
+    enum MarketDirection {
+        Bullish,
+        Bearish,
+        Uncertain
+    }
 
     uint256 public immutable expirationInterval;
+    bytes32 public vkHash;
+    uint256 public volatility;
+
+    /// @notice The list of observations for a given poolId
+    mapping(PoolId => Struct.Observation[65535]) public observations;
+    /// @notice The current observation array state for the pool
+    mapping(PoolId => Struct.ObservationState) public observationStates;
+
+    // Market direction tracking
+    mapping(PoolId => uint256) public lastPrices;
+    mapping(PoolId => uint256) public lastTimestamp;
+    mapping(PoolId => uint24) public lastFee;
+
+    uint24 public constant BASE_FEE = 200; // 2bps
+    uint24 public constant MAX_FEE = 1000; // 10bps
+    uint24 public constant HOOK_COMMISSION = 100; // 1bps paid to the hook to cover Brevis costs
 
     /// @notice The state of the long term orders
     mapping(PoolId => Struct.OrderState) internal orderStates;
@@ -48,7 +76,10 @@ contract UniqHook is BaseHook, IUniqHook {
     /// @notice The amount of tokens owed to each user
     mapping(Currency => mapping(address => uint256)) public tokensOwed;
 
-    constructor(IPoolManager poolManager, uint256 expirationInterval_) BaseHook(poolManager) {
+    constructor(IPoolManager poolManager, uint256 expirationInterval_, address brevisProof_)
+        BaseHook(poolManager)
+        BrevisApp(IBrevisProof(brevisProof_))
+    {
         expirationInterval = expirationInterval_;
     }
 
@@ -77,7 +108,10 @@ contract UniqHook is BaseHook, IUniqHook {
         onlyByPoolManager
         returns (bytes4)
     {
-        console.log("////////////////// Initialize TWAMM //////////////////");
+        if (!key.fee.isDynamicFee()) {
+            revert Errors.MustUseDynamicFee();
+        }
+
         LongTermOrder.initialize(_getTWAMM(key));
 
         return this.beforeInitialize.selector;
@@ -89,20 +123,25 @@ contract UniqHook is BaseHook, IUniqHook {
         IPoolManager.ModifyLiquidityParams calldata,
         bytes calldata
     ) external override onlyByPoolManager returns (bytes4) {
-        console.log("////////////////// Before Add Liqudity //////////////////");
         executeTWAMMOrders(key);
+
         return this.beforeAddLiquidity.selector;
     }
 
-    function beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata, bytes calldata)
+    function beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata)
         external
         override
         onlyByPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        console.log("////////////////// Before Swap //////////////////");
         executeTWAMMOrders(key);
-        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+
+        // calculate dynamic fee based on volatility
+        uint24 dynamicFee = adjustFee(params.amountSpecified);
+
+        dynamicFee = dynamicFee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
+
+        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, dynamicFee);
     }
 
     ///////////////////////////////////////////////////////////////////////
@@ -142,7 +181,6 @@ contract UniqHook is BaseHook, IUniqHook {
         external
         returns (bytes32 orderId)
     {
-        console.log("////////////////// Submit Order //////////////////");
         PoolId id = PoolId.wrap(keccak256(abi.encode(key)));
         Struct.OrderState storage state = orderStates[id];
         executeTWAMMOrders(key);
@@ -218,7 +256,6 @@ contract UniqHook is BaseHook, IUniqHook {
         view
         returns (Struct.Order memory)
     {
-        console.log("////////////////// Get Order //////////////////");
         return LongTermOrder.getOrder(orderStates[PoolId.wrap(keccak256(abi.encode(key)))], orderKey);
     }
 
@@ -228,7 +265,6 @@ contract UniqHook is BaseHook, IUniqHook {
         view
         returns (uint256 currentSellRate, uint256 currentRewardFactor)
     {
-        console.log("////////////////// Get Order Pool //////////////////");
         Struct.OrderState storage state = _getTWAMM(key);
         return zeroForOne
             ? (state.orderPool0For1.currentSellRate, state.orderPool0For1.currentRewardFactor)
@@ -267,5 +303,103 @@ contract UniqHook is BaseHook, IUniqHook {
             }
         }
         return bytes("");
+    }
+
+    function brevisCommission(PoolKey calldata key, IPoolManager.SwapParams calldata swapParams) internal {
+        uint256 tokenAmount =
+            swapParams.amountSpecified < 0 ? uint256(-swapParams.amountSpecified) : uint256(swapParams.amountSpecified);
+
+        uint256 fee = Math.mulDiv(tokenAmount, HOOK_COMMISSION, 10_000);
+
+        // determine inbound token based on 0 or 1 or 1 or 0 swap
+        Currency inboundToken = swapParams.zeroForOne ? key.currency0 : key.currency1;
+
+        // take the inbound token from PoolManager, debt is paid by the swapper via swap router
+        // inboud token is added to hook's reserves
+        poolManager.take(inboundToken, address(this), fee);
+    }
+
+    /// @notice This function takes in parameters necessary to retrieve historical data, calculate moving averages and volatility
+
+    ///////////////////////////////////////////////////////////////////////
+    ///                     Brevis Override Functions                   ///
+    ///////////////////////////////////////////////////////////////////////
+    function handleProofResult(bytes32, bytes32 vkHash_, bytes calldata circuitOutput_) internal override {
+        if (vkHash != vkHash_) revert Errors.InvalidVkHash();
+
+        volatility = decodeOutput(circuitOutput_);
+    }
+
+    function decodeOutput(bytes calldata output) internal pure returns (uint256) {
+        uint248 vol = uint248(bytes31(output[0:31])); // vol is output as uint248 (31 bytes)
+
+        return uint256(vol);
+    }
+
+    function setVkHash(bytes32 vkHash_) external {
+        vkHash = vkHash_;
+    }
+
+    function calculateFee(uint256 vol) private view returns (uint24) {}
+
+    function getFee(int256 amount) external view returns (uint24) {
+        return calculateFee(abs(amount));
+    }
+
+    function abs(int256 x) private pure returns (uint256) {
+        return x >= 0 ? uint256(x) : uint256(-x);
+    }
+
+    function sqrt(uint256 x) internal pure returns (uint256) {
+        if (x == 0) return 0;
+
+        uint256 z = (x + 1) / 2;
+        uint256 y = x;
+
+        while (z < y) {
+            y = z;
+            z = (x / z + z) / 2;
+        }
+
+        return y;
+    }
+
+    function adjustFee(int256 amountSpecified) internal view returns (uint24) {
+        uint24 adjustedFee = BASE_FEE;
+        int256 priceImpact = int256(uint256(BASE_FEE)) - int256(volatility);
+
+        if (volatility > 0) {
+            // Buying
+            if (amountSpecified > 0) {
+                if (priceImpact > 0) {
+                    // Increase the fee more if the trade goes against a falling market
+                    adjustedFee += uint24(Math.min(uint256(priceImpact) + volatility, MAX_FEE));
+                } else {
+                    // Standard increase for buy in rising market
+                    adjustedFee += uint24(Math.min(volatility, MAX_FEE));
+                }
+            } else {
+                // Selling
+                if (priceImpact < 0) {
+                    // Decrease the fee more if the trade aligns with a falling market
+                    int256 reducedFee = int256(uint256(BASE_FEE)) - int256(volatility) - priceImpact;
+                    if (reducedFee < 0) {
+                        adjustedFee = 0;
+                    } else {
+                        adjustedFee = uint24(uint256(reducedFee));
+                    }
+                } else {
+                    // Standard decrease for sell in rising market
+                    int256 reducedFee = int256(uint256(BASE_FEE)) - int256(volatility);
+                    if (reducedFee < 0) {
+                        adjustedFee = 0;
+                    } else {
+                        adjustedFee = uint24(uint256(reducedFee));
+                    }
+                }
+            }
+        }
+
+        return adjustedFee;
     }
 }

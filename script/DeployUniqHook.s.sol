@@ -11,10 +11,11 @@ contract DeployUniqHook is Script {
     HelperConfig helperConfig = new HelperConfig();
     IPoolManager poolManager;
     UniqHook uniqHook;
+    address brevisProof;
 
     function run() external returns (address) {
         UniqHookImplementation impl =
-            new UniqHookImplementation(poolManager, helperConfig.EXPIRATION_INTERVAL(), uniqHook);
+            new UniqHookImplementation(poolManager, helperConfig.EXPIRATION_INTERVAL(), brevisProof, uniqHook);
         console.log("UniqHook deployed at: ", address(impl));
         return address(impl);
     }

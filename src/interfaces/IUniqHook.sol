@@ -44,6 +44,10 @@ interface IUniqHook {
         uint256 earningsFactorLast
     );
 
+    /// @notice Emitted when the volatility of the TWAMM is updated
+    /// @param volatility The new volatility of the TWAMM
+    event UpdateVolatility(uint256 volatility);
+
     /// @notice Time interval on which orders are allowed to expire. Conserves processing needed on execute
     // function expirationInterval() external view returns (uint256);
 

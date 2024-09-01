@@ -7,7 +7,9 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 
 contract UniqHookImplementation is UniqHook {
-    constructor(IPoolManager _manager, uint256 interval, UniqHook addressToEtch) UniqHook(_manager, interval) {
+    constructor(IPoolManager _manager, uint256 interval, address brevisProof, UniqHook addressToEtch)
+        UniqHook(_manager, interval, brevisProof)
+    {
         Hooks.validateHookPermissions(addressToEtch, getHookPermissions());
     }
 

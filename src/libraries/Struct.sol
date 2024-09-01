@@ -74,4 +74,24 @@ library Struct {
         OrderPool orderPool1For0;
         mapping(bytes32 => Order) orders;
     }
+
+    struct Observation {
+        // the block timestamp of the observation
+        uint32 blockTimestamp;
+        // the tick accumulator, i.e. tick * time elapsed since the pool was first initialized
+        int56 tickCumulative;
+        // the seconds per liquidity, i.e. seconds elapsed / max(1, liquidity) since the pool was first initialized
+        uint160 secondsPerLiquidityCumulativeX128;
+        // whether or not the observation is initialized
+        bool initialized;
+    }
+
+    /// @member index The index of the last written observation for the pool
+    /// @member cardinality The cardinality of the observations array for the pool
+    /// @member cardinalityNext The cardinality target of the observations array for the pool, which will replace cardinality when enough observations are written
+    struct ObservationState {
+        uint16 index;
+        uint16 cardinality;
+        uint16 cardinalityNext;
+    }
 }

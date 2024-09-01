@@ -5,6 +5,7 @@ import {IBrevisProof, Brevis} from "src/interfaces/brevis/IBrevisProof.sol";
 
 contract MockBrevisProof is IBrevisProof {
     mapping(bytes32 => Brevis.ProofData) public mockOutput;
+    uint256 private simulatedVolatility;
 
     function setMockOutput(bytes32 requestId, bytes32 outputCommit, bytes32 vkHash) public {
         mockOutput[requestId] = Brevis.ProofData({
@@ -17,11 +18,16 @@ contract MockBrevisProof is IBrevisProof {
         });
     }
 
+    function setSimulatedVolatility(uint256 _volatility) public {
+        simulatedVolatility = _volatility;
+    }
+
     function submitProof(uint64 chainId, bytes calldata proofWithPubInputs, bool withAppProof)
         external
+        pure
         returns (bytes32 requestId)
     {
-        return bytes32(0);
+        requestId = bytes32(keccak256(abi.encodePacked(chainId, proofWithPubInputs, withAppProof)));
     }
 
     function hasProof(bytes32 requestId) external view returns (bool) {

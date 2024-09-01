@@ -24,10 +24,15 @@ import {DeployUniqHook} from "script/DeployUniqHook.s.sol";
 import {LongTermOrder} from "src/libraries/LongTermOrder.sol";
 import {Struct} from "src/libraries/Struct.sol";
 import {UniqHook} from "src/UniqHook.sol";
+import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
+import {MockBrevisProof, IBrevisProof} from "test/mocks/MockBrevisProof.sol";
+import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 
 contract UniqHookTest is Test, Deployers, GasSnapshot {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+
+    bytes32 private constant VK_HASH = 0x179a48b8a2a08b246cd51cb7b78143db774a83ff75fad0d39cf0445e16773426;
 
     event SubmitOrder(
         PoolId indexed poolId,
@@ -53,6 +58,7 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
 
     MockERC20 tsla;
     MockERC20 usdc;
+    MockBrevisProof brevisProofMock;
     PoolKey poolKey;
     PoolId poolId;
 
@@ -65,10 +71,12 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
 
         tsla = MockERC20(Currency.unwrap(currency0));
         usdc = MockERC20(Currency.unwrap(currency1));
+        brevisProofMock = new MockBrevisProof();
 
-        UniqHookImplementation impl = new UniqHookImplementation(manager, 10_000, uniqHook);
+        UniqHookImplementation impl = new UniqHookImplementation(manager, 10_000, address(brevisProofMock), uniqHook);
         // Tell the VM to start recording all storage reads and writes
         (, bytes32[] memory writes) = vm.accesses(address(uniqHook));
+
         // Enabling custom precompile for UniqHook
         vm.etch(address(uniqHook), address(impl).code);
 
@@ -81,12 +89,15 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
         }
 
         // Initialize the pool
-        (poolKey, poolId) = initPool(currency0, currency1, uniqHook, 3000, SQRT_PRICE_1_1, ZERO_BYTES);
+        (poolKey, poolId) =
+            initPool(currency0, currency1, uniqHook, LPFeeLibrary.DYNAMIC_FEE_FLAG, SQRT_PRICE_1_1, ZERO_BYTES);
 
         tsla.approve(address(modifyLiquidityRouter), 100 ether);
         usdc.approve(address(modifyLiquidityRouter), 100 ether);
         tsla.mint(address(this), 100 ether);
         usdc.mint(address(this), 100 ether);
+
+        uniqHook.setVkHash(VK_HASH);
 
         // Add liquidity at short range
         modifyLiquidityRouter.modifyLiquidity(
@@ -432,7 +443,7 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
 
     function newPoolKeyWithTWAMM(IHooks hooks) public returns (PoolKey memory, PoolId) {
         (Currency _token0, Currency _token1) = deployMintAndApprove2Currencies();
-        PoolKey memory key = PoolKey(_token0, _token1, 0, 60, hooks);
+        PoolKey memory key = PoolKey(_token0, _token1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, hooks);
         return (key, key.toId());
     }
 

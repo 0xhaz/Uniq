@@ -40,4 +40,28 @@ library Errors {
     /// @param unsoldAmount The amount still unsold
     /// @param amountDelta The amount delta for the order
     error InvalidAmountDelta(Struct.OrderKey orderKey, uint256 unsoldAmount, int256 amountDelta);
+
+    /// @notice Thrown when vkHash is not valid
+    error InvalidVkHash();
+
+    /// @notice Thrown when fee is not dynamic
+    error MustUseDynamicFee();
+
+    error Oracle__StalePrice();
+    error Oracle__CardinalityCannotBeZero();
+
+    /// @notice Thrown when trying to observe a price that is older than the oldest recorded price
+    /// @param oldestTimestamp Timestamp of the oldest remaining observation
+    /// @param targetTimestamp Invalid timestamp targeted to be observed
+    error Oracle__TargetPredatesOldestObservation(uint32 oldestTimestamp, uint32 targetTimestamp);
+
+    /// @notice Thrown when trying to interact with an Oracle of a non-initialized pool
+    error OracleCardinalityCannotBeZero();
+
+    error OraclePositionMustBeFullRange();
+
+    /// @notice Thrown when trying to observe a price that is older than the oldest recorded price
+    /// @param oldestTimestamp Timestamp of the oldest remaining observation
+    /// @param targetTimestamp Invalid timestamp targeted to be observed
+    error TargetPredatesOldestObservation(uint32 oldestTimestamp, uint32 targetTimestamp);
 }
