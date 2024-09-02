@@ -46,20 +46,9 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     using LPFeeLibrary for uint24;
     using Oracle for Struct.Observation[65535];
 
-    enum MarketDirection {
-        Bullish,
-        Bearish,
-        Uncertain
-    }
-
     uint256 public immutable expirationInterval;
     bytes32 public vkHash;
     uint256 public volatility;
-
-    /// @notice The list of observations for a given poolId
-    mapping(PoolId => Struct.Observation[65535]) public observations;
-    /// @notice The current observation array state for the pool
-    mapping(PoolId => Struct.ObservationState) public observationStates;
 
     // Market direction tracking
     mapping(PoolId => uint256) public lastPrices;
@@ -271,6 +260,11 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
             : (state.orderPool1For0.currentSellRate, state.orderPool1For0.currentRewardFactor);
     }
 
+    /// @dev For testing purposes only
+    function setVolatility(uint256 vol) external {
+        volatility = vol;
+    }
+
     ///////////////////////////////////////////////////////////////////////
     ///                     Internal Functions                          ///
     ///////////////////////////////////////////////////////////////////////
@@ -374,27 +368,33 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
                 if (priceImpact > 0) {
                     // Increase the fee more if the trade goes against a falling market
                     adjustedFee += uint24(Math.min(uint256(priceImpact) + volatility, MAX_FEE));
+                    console.log("Adjusted Fee If Price Impact > 0: ", adjustedFee);
                 } else {
                     // Standard increase for buy in rising market
                     adjustedFee += uint24(Math.min(volatility, MAX_FEE));
+                    console.log("Adjusted Fee W/O Price Impact > 0: ", adjustedFee);
                 }
             } else {
                 // Selling
                 if (priceImpact < 0) {
                     // Decrease the fee more if the trade aligns with a falling market
                     int256 reducedFee = int256(uint256(BASE_FEE)) - int256(volatility) - priceImpact;
+                    console.log("Reduced Fee: ", reducedFee);
                     if (reducedFee < 0) {
                         adjustedFee = 0;
                     } else {
                         adjustedFee = uint24(uint256(reducedFee));
+                        console.log("Adjusted Fee If Price Impact < 0: ", adjustedFee);
                     }
                 } else {
                     // Standard decrease for sell in rising market
                     int256 reducedFee = int256(uint256(BASE_FEE)) - int256(volatility);
+                    console.log("Reduced Fee: ", reducedFee);
                     if (reducedFee < 0) {
                         adjustedFee = 0;
                     } else {
                         adjustedFee = uint24(uint256(reducedFee));
+                        console.log("Adjusted Fee Reduced Fee is > 0: ", adjustedFee);
                     }
                 }
             }

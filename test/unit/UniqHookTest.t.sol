@@ -441,6 +441,20 @@ contract UniqHookTest is Test, Deployers, GasSnapshot {
         assertEq(balance1AfterThis - balance1BeforeThis, orderAmount);
     }
 
+    function testUniqHook_VolatilityImpact_OnFeeAdjustment() public {
+        uint256 balance1Before = poolKey.currency1.balanceOfSelf();
+        bool zeroForOne = true;
+        int256 amountSpecified = 1 ether;
+        uint248 volatility = 20e18;
+
+        uniqHook.setVolatility(volatility);
+        brevisProofMock.submitProof(1, bytes(""), true);
+        brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
+        // uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
+
+        assertEq(uniqHook.volatility(), volatility);
+    }
+
     function newPoolKeyWithTWAMM(IHooks hooks) public returns (PoolKey memory, PoolId) {
         (Currency _token0, Currency _token1) = deployMintAndApprove2Currencies();
         PoolKey memory key = PoolKey(_token0, _token1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, hooks);
