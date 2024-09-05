@@ -46,29 +46,17 @@
 //     using LPFeeLibrary for uint24;
 //     using Oracle for Struct.Observation[65535];
 
-//     enum MarketDirection {
-//         Bullish,
-//         Bearish,
-//         Uncertain
-//     }
-
 //     uint256 public immutable expirationInterval;
 //     bytes32 public vkHash;
 //     uint256 public volatility;
-//     bool uncertainIsBullish;
-//     uint256 numLongTimePeriods;
-//     uint256 numShortTimePeriods;
 
-//     // keeping track of the moving average gas price
-//     uint128 movingAverageGasPrice;
-//     uint104 movingAverageGasCount;
-
-//     /// @notice The list of observations for a given poolId
-//     mapping(PoolId => Struct.Observation[65535]) public observations;
-//     /// @notice The current observation array state for the pool
-//     mapping(PoolId => Struct.ObservationState) public observationStates;
+//     // Market direction tracking
+//     mapping(PoolId => uint256) public lastPrices;
+//     mapping(PoolId => uint256) public lastTimestamp;
+//     mapping(PoolId => uint24) public lastFee;
 
 //     uint24 public constant BASE_FEE = 200; // 2bps
+//     uint24 public constant MAX_FEE = 1000; // 10bps
 //     uint24 public constant HOOK_COMMISSION = 100; // 1bps paid to the hook to cover Brevis costs
 
 //     /// @notice The state of the long term orders
@@ -87,9 +75,9 @@
 //     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
 //         return Hooks.Permissions({
 //             beforeInitialize: true,
-//             afterInitialize: true,
+//             afterInitialize: false,
 //             beforeAddLiquidity: true,
-//             beforeRemoveLiquidity: true,
+//             beforeRemoveLiquidity: false,
 //             afterAddLiquidity: false,
 //             afterRemoveLiquidity: false,
 //             beforeSwap: true,
@@ -109,9 +97,7 @@
 //         onlyByPoolManager
 //         returns (bytes4)
 //     {
-//         int24 maxTickSpacing = type(int16).max;
-
-//         if (!key.fee.isDynamicFee() || key.tickSpacing != maxTickSpacing) {
+//         if (!key.fee.isDynamicFee()) {
 //             revert Errors.MustUseDynamicFee();
 //         }
 
@@ -120,43 +106,15 @@
 //         return this.beforeInitialize.selector;
 //     }
 
-//     function afterInitialize(address, PoolKey calldata key, uint160, int24, bytes calldata)
-//         external
-//         override
-//         onlyByPoolManager
-//         returns (bytes4)
-//     {
-//         PoolId id = key.toId();
-//         (observationStates[id].cardinality, observationStates[id].cardinalityNext) =
-//             observations[id].initialize(_blockTimestamp());
-//         return this.afterInitialize.selector;
-//     }
-
 //     function beforeAddLiquidity(
 //         address,
 //         PoolKey calldata key,
-//         IPoolManager.ModifyLiquidityParams calldata params,
-//         bytes calldata
-//     ) external override onlyByPoolManager returns (bytes4) {
-//         int24 maxTickSpacing = type(int16).max;
-//         if (
-//             params.tickLower != TickMath.minUsableTick(maxTickSpacing)
-//                 || params.tickUpper != TickMath.maxUsableTick(maxTickSpacing)
-//         ) {
-//             revert Errors.OraclePositionMustBeFullRange();
-//         }
-//         executeTWAMMOrders(key);
-//         _updatePool(key);
-//         return this.beforeAddLiquidity.selector;
-//     }
-
-//     function beforeRemoveLiquidity(
-//         address,
-//         PoolKey calldata,
 //         IPoolManager.ModifyLiquidityParams calldata,
 //         bytes calldata
-//     ) external view override onlyByPoolManager returns (bytes4) {
-//         return this.beforeRemoveLiquidity.selector;
+//     ) external override onlyByPoolManager returns (bytes4) {
+//         executeTWAMMOrders(key);
+
+//         return this.beforeAddLiquidity.selector;
 //     }
 
 //     function beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata)
@@ -165,11 +123,10 @@
 //         onlyByPoolManager
 //         returns (bytes4, BeforeSwapDelta, uint24)
 //     {
-//         _updatePool(key);
 //         executeTWAMMOrders(key);
 
 //         // calculate dynamic fee based on volatility
-//         uint24 dynamicFee = calculateFee(abs(params.amountSpecified));
+//         uint24 dynamicFee = adjustFee(params.amountSpecified);
 
 //         dynamicFee = dynamicFee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
 
@@ -213,7 +170,6 @@
 //         external
 //         returns (bytes32 orderId)
 //     {
-//         console.log("////////////////// Submit Order //////////////////");
 //         PoolId id = PoolId.wrap(keccak256(abi.encode(key)));
 //         Struct.OrderState storage state = orderStates[id];
 //         executeTWAMMOrders(key);
@@ -289,7 +245,6 @@
 //         view
 //         returns (Struct.Order memory)
 //     {
-//         console.log("////////////////// Get Order //////////////////");
 //         return LongTermOrder.getOrder(orderStates[PoolId.wrap(keccak256(abi.encode(key)))], orderKey);
 //     }
 
@@ -299,24 +254,15 @@
 //         view
 //         returns (uint256 currentSellRate, uint256 currentRewardFactor)
 //     {
-//         console.log("////////////////// Get Order Pool //////////////////");
 //         Struct.OrderState storage state = _getTWAMM(key);
 //         return zeroForOne
 //             ? (state.orderPool0For1.currentSellRate, state.orderPool0For1.currentRewardFactor)
 //             : (state.orderPool1For0.currentSellRate, state.orderPool1For0.currentRewardFactor);
 //     }
 
-//     function updateMovingAverage() external returns (uint128) {
-//         uint128 gasPrice = uint128(tx.gasprice);
-
-//         // New Average = ((Old Average * # of Txns Tracked) + Current Gas Price) / (# of Txns Tracked + 1)
-//         movingAverageGasPrice =
-//             uint128((movingAverageGasPrice * movingAverageGasCount + gasPrice) / (movingAverageGasCount + 1));
-
-//         // Increment the number of transactions tracked
-//         movingAverageGasCount++;
-
-//         return movingAverageGasPrice;
+//     /// @dev For testing purposes only
+//     function setVolatility(uint256 vol) external {
+//         volatility = vol;
 //     }
 
 //     ///////////////////////////////////////////////////////////////////////
@@ -376,8 +322,6 @@
 //         if (vkHash != vkHash_) revert Errors.InvalidVkHash();
 
 //         volatility = decodeOutput(circuitOutput_);
-
-//         emit UpdateVolatility(volatility);
 //     }
 
 //     function decodeOutput(bytes calldata output) internal pure returns (uint256) {
@@ -390,12 +334,7 @@
 //         vkHash = vkHash_;
 //     }
 
-//     function calculateFee(uint256 vol) private view returns (uint24) {
-//         uint256 constant_factor = 1e26; //
-//         uint256 variableFee = sqrt(vol) * volatility / constant_factor;
-//         // sqrt(vol) * vol / 1e26
-//         return uint24(BASE_FEE + variableFee);
-//     }
+//     function calculateFee(uint256 vol) private view returns (uint24) {}
 
 //     function getFee(int256 amount) external view returns (uint24) {
 //         return calculateFee(abs(amount));
@@ -419,106 +358,48 @@
 //         return y;
 //     }
 
-//     /// @notice Returns the observation for the given poolId and index
-//     function getObservation(PoolKey calldata key, uint256 index)
-//         external
-//         view
-//         returns (Struct.Observation memory observation)
-//     {
-//         observation = observations[PoolId.wrap(keccak256(abi.encode(key)))][index];
-//     }
+//     function adjustFee(int256 amountSpecified) internal view returns (uint24) {
+//         uint24 adjustedFee = BASE_FEE;
+//         int256 priceImpact = int256(uint256(BASE_FEE)) - int256(volatility);
 
-//     /// @notice Returns the state for the given pool key
-//     function getState(PoolKey calldata key) external view returns (Struct.ObservationState memory state) {
-//         state = observationStates[PoolId.wrap(keccak256(abi.encode(key)))];
-//     }
-
-//     /// @dev For mocking
-//     function _blockTimestamp() internal view virtual returns (uint32) {
-//         return uint32(block.timestamp);
-//     }
-
-//     /// @notice observe the given pool for the timestamps
-//     function observe(PoolKey calldata key, uint32[] calldata secondsAgos)
-//         external
-//         view
-//         returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
-//     {
-//         PoolId id = key.toId();
-//         Struct.ObservationState memory state = observationStates[id];
-//         (, int24 tick,,) = poolManager.getSlot0(id);
-
-//         uint128 liquidity = poolManager.getLiquidity(id);
-
-//         return observations[id].observe(_blockTimestamp(), secondsAgos, tick, state.index, liquidity, state.cardinality);
-//     }
-
-//     /// @dev Called before any action that potentially modifies pool price or liquidity, such as swap or modify positions
-//     function _updatePool(PoolKey calldata key) private {
-//         PoolId id = key.toId();
-//         (, int24 tick,,) = poolManager.getSlot0(id);
-
-//         uint128 liqudity = poolManager.getLiquidity(id);
-
-//         (observationStates[id].index, observationStates[id].cardinality) = observations[id].write(
-//             observationStates[id].index,
-//             _blockTimestamp(),
-//             tick,
-//             liqudity,
-//             observationStates[id].cardinality,
-//             observationStates[id].cardinalityNext
-//         );
-//     }
-
-//     function calculateMMA(uint256[] memory shortTimePeriods, uint256[] memory longTimePeriods)
-//         public
-//         pure
-//         returns (MarketDirection)
-//     {
-//         require(shortTimePeriods.length > 0 && longTimePeriods.length > 0, "Invalid time periods");
-
-//         uint256 minS = shortTimePeriods[0];
-//         uint256 maxS = shortTimePeriods[0];
-//         for (uint256 i = 1; i < shortTimePeriods.length; i++) {
-//             if (shortTimePeriods[i] < minS) {
-//                 minS = shortTimePeriods[i];
-//             }
-//             if (shortTimePeriods[i] > maxS) {
-//                 maxS = shortTimePeriods[i];
+//         if (volatility > 0) {
+//             // Buying
+//             if (amountSpecified > 0) {
+//                 if (priceImpact > 0) {
+//                     // Increase the fee more if the trade goes against a falling market
+//                     adjustedFee += uint24(Math.min(uint256(priceImpact) + volatility, MAX_FEE));
+//                     console.log("Adjusted Fee If Price Impact > 0: ", adjustedFee);
+//                 } else {
+//                     // Standard increase for buy in rising market
+//                     adjustedFee += uint24(Math.min(volatility, MAX_FEE));
+//                     console.log("Adjusted Fee W/O Price Impact > 0: ", adjustedFee);
+//                 }
+//             } else {
+//                 // Selling
+//                 if (priceImpact < 0) {
+//                     // Decrease the fee more if the trade aligns with a falling market
+//                     int256 reducedFee = int256(uint256(BASE_FEE)) - int256(volatility) - priceImpact;
+//                     console.log("Reduced Fee: ", reducedFee);
+//                     if (reducedFee < 0) {
+//                         adjustedFee = 0;
+//                     } else {
+//                         adjustedFee = uint24(uint256(reducedFee));
+//                         console.log("Adjusted Fee If Price Impact < 0: ", adjustedFee);
+//                     }
+//                 } else {
+//                     // Standard decrease for sell in rising market
+//                     int256 reducedFee = int256(uint256(BASE_FEE)) - int256(volatility);
+//                     console.log("Reduced Fee: ", reducedFee);
+//                     if (reducedFee < 0) {
+//                         adjustedFee = 0;
+//                     } else {
+//                         adjustedFee = uint24(uint256(reducedFee));
+//                         console.log("Adjusted Fee Reduced Fee is > 0: ", adjustedFee);
+//                     }
+//                 }
 //             }
 //         }
 
-//         uint256 minL = longTimePeriods[0];
-//         uint256 maxL = longTimePeriods[0];
-//         for (uint256 i = 1; i < longTimePeriods.length; i++) {
-//             if (longTimePeriods[i] < minL) {
-//                 minL = longTimePeriods[i];
-//             }
-//             if (longTimePeriods[i] > maxL) {
-//                 maxL = longTimePeriods[i];
-//             }
-//         }
-
-//         if (minS > maxL) {
-//             return MarketDirection.Bullish;
-//         } else if (maxS < minL) {
-//             return MarketDirection.Bearish;
-//         } else {
-//             return MarketDirection.Uncertain;
-//         }
-//     }
-
-//     function updateVolatility(uint256[] memory S, uint256[] memory L) public returns (uint256) {
-//         MarketDirection direction = calculateMMA(S, L);
-
-//         if (direction == MarketDirection.Bullish) {
-//             volatility = 5; // 0.5bps
-//         } else if (direction == MarketDirection.Bearish) {
-//             volatility = 20; // 2bps
-//         } else {
-//             volatility = 10; // 1bps
-//         }
-
-//         return volatility;
+//         return adjustedFee;
 //     }
 // }
