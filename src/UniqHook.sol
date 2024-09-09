@@ -44,7 +44,6 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     using TickBitmap for mapping(int16 => uint256);
     using StateLibrary for IPoolManager;
     using LPFeeLibrary for uint24;
-    using Oracle for Struct.Observation[65535];
 
     uint256 public immutable expirationInterval;
     bytes32 public vkHash;
@@ -55,9 +54,16 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     mapping(PoolId => uint256) public lastTimestamp;
     mapping(PoolId => uint24) public lastFee;
 
+    mapping(PoolId => uint256) public highestPrice;
+    mapping(PoolId => uint256) public lowestPrice;
+    mapping(PoolId => uint256) public largestVolume;
+
     uint24 public constant BASE_FEE = 200; // 2bps
+    uint24 public constant MIN_FEE = 50; // 0.5bps
     uint24 public constant MAX_FEE = 1000; // 10bps
     uint24 public constant HOOK_COMMISSION = 100; // 1bps paid to the hook to cover Brevis costs
+    uint256 public constant VOLATILITY_MULTIPLIER = 10; // 1% increase in fee per 10% increase in volatility
+    uint256 public VOLATILITY_FACTOR = 1e26; //
 
     /// @notice The state of the long term orders
     mapping(PoolId => Struct.OrderState) internal orderStates;
@@ -126,7 +132,11 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         executeTWAMMOrders(key);
 
         // calculate dynamic fee based on volatility
-        uint24 dynamicFee = adjustFee(params.amountSpecified);
+        uint256 priceMovement = calculateMovement(key);
+        uint24 dynamicFee = adjustFee(abs(params.amountSpecified), priceMovement, key);
+        console.log("Dynamic Fee Applied: %s", dynamicFee);
+        /// @notice Updates the pools lp fees for the a pool that has enabled dynamic lp fees.
+        poolManager.updateDynamicLPFee(key, dynamicFee);
 
         dynamicFee = dynamicFee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
 
@@ -138,7 +148,6 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     ///////////////////////////////////////////////////////////////////////
     /// @inheritdoc IUniqHook
     function executeTWAMMOrders(PoolKey memory key) public {
-        console.log("////////////////// Execute TWAMM Orders //////////////////");
         PoolId id = key.toId();
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(id);
         Struct.OrderState storage state = orderStates[id];
@@ -270,12 +279,10 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     ///////////////////////////////////////////////////////////////////////
 
     function _getTWAMM(PoolKey memory key) internal view returns (Struct.OrderState storage) {
-        console.log("////////////////// Get TWAMM //////////////////");
         return orderStates[PoolId.wrap(keccak256(abi.encode(key)))];
     }
 
     function _unlockCallback(bytes calldata rawData) internal override returns (bytes memory) {
-        console.log("////////////////// Unlock Callback //////////////////");
         (PoolKey memory key, IPoolManager.SwapParams memory swapParams) =
             abi.decode(rawData, (PoolKey, IPoolManager.SwapParams));
 
@@ -334,10 +341,36 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         vkHash = vkHash_;
     }
 
-    function calculateFee(uint256 vol) private view returns (uint24) {}
+    function calculateMovement(PoolKey calldata key) private returns (uint256 priceMovement) {
+        // calculate the price movement from the last block
+        PoolId poolId = key.toId();
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
 
-    function getFee(int256 amount) external view returns (uint24) {
-        return calculateFee(abs(amount));
+        // Calculate the price from sqrtPriceX96
+        uint256 price = uint256(sqrtPriceX96) * uint256(sqrtPriceX96) / FixedPoint96.Q96;
+        uint256 lastPrice = lastPrices[poolId];
+
+        // Store the current price for next time
+        lastPrices[poolId] = price;
+        lastTimestamp[poolId] = block.timestamp;
+
+        // Calculate price movement as a percentage difference
+        if (lastPrice == 0) {
+            // Initial case, no movement
+            priceMovement = 0;
+        } else {
+            priceMovement = (price > lastPrice)
+                ? ((price - lastPrice) * 1e18) / lastPrice // price increased
+                : ((lastPrice - price) * 1e18) / lastPrice; // price decreased
+        }
+        console.log("Price Movement: %s", priceMovement);
+
+        return priceMovement;
+    }
+
+    function getFee(int256 amount, PoolKey calldata key) external returns (uint24) {
+        uint256 priceMovement = calculateMovement(key);
+        return adjustFee(abs(amount), priceMovement, key);
     }
 
     function abs(int256 x) private pure returns (uint256) {
@@ -358,48 +391,35 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         return y;
     }
 
-    function adjustFee(int256 amountSpecified) internal view returns (uint24) {
-        uint24 adjustedFee = BASE_FEE;
-        int256 priceImpact = int256(uint256(BASE_FEE)) - int256(volatility);
+    // adjust the volatility fee based on the volume of the swap
+    function adjustFee(uint256 volume, uint256 priceMovement, PoolKey calldata key) internal returns (uint24) {
+        PoolId poolId = key.toId();
 
-        if (volatility > 0) {
-            // Buying
-            if (amountSpecified > 0) {
-                if (priceImpact > 0) {
-                    // Increase the fee more if the trade goes against a falling market
-                    adjustedFee += uint24(Math.min(uint256(priceImpact) + volatility, MAX_FEE));
-                    console.log("Adjusted Fee If Price Impact > 0: ", adjustedFee);
-                } else {
-                    // Standard increase for buy in rising market
-                    adjustedFee += uint24(Math.min(volatility, MAX_FEE));
-                    console.log("Adjusted Fee W/O Price Impact > 0: ", adjustedFee);
-                }
-            } else {
-                // Selling
-                if (priceImpact < 0) {
-                    // Decrease the fee more if the trade aligns with a falling market
-                    int256 reducedFee = int256(uint256(BASE_FEE)) - int256(volatility) - priceImpact;
-                    console.log("Reduced Fee: ", reducedFee);
-                    if (reducedFee < 0) {
-                        adjustedFee = 0;
-                    } else {
-                        adjustedFee = uint24(uint256(reducedFee));
-                        console.log("Adjusted Fee If Price Impact < 0: ", adjustedFee);
-                    }
-                } else {
-                    // Standard decrease for sell in rising market
-                    int256 reducedFee = int256(uint256(BASE_FEE)) - int256(volatility);
-                    console.log("Reduced Fee: ", reducedFee);
-                    if (reducedFee < 0) {
-                        adjustedFee = 0;
-                    } else {
-                        adjustedFee = uint24(uint256(reducedFee));
-                        console.log("Adjusted Fee Reduced Fee is > 0: ", adjustedFee);
-                    }
-                }
-            }
+        // Previous fee for this pool
+        uint24 lastFee_ = lastFee[poolId];
+
+        // Base volatility fee based on price movement and volatility multiplier
+        uint256 volatilityFee = (volatility * VOLATILITY_MULTIPLIER * priceMovement) / VOLATILITY_FACTOR;
+        console.log("Volatility Fee: %s", volatilityFee);
+
+        uint256 volumeFactor = (sqrt(volume) * volatility) / (VOLATILITY_FACTOR); // Adjust scaling factor as needed
+        console.log("Volume Factor: %s", volumeFactor);
+
+        // New dynamic fee = base fee + volatility fee + volume factor
+        uint24 dynamicFee = uint24(lastFee_ + volatilityFee + volumeFactor);
+        console.log("Dynamic Fee: %s", dynamicFee);
+
+        // Ensure the fee stays within allowed bounds
+        if (dynamicFee > MAX_FEE) {
+            dynamicFee = MAX_FEE;
+        } else if (dynamicFee < MIN_FEE) {
+            dynamicFee = MIN_FEE;
         }
 
-        return adjustedFee;
+        // Store the last fee for the next calculation
+        lastFee[poolId] = dynamicFee;
+        console.log("Last Fee: %s", lastFee[poolId]);
+
+        return dynamicFee;
     }
 }

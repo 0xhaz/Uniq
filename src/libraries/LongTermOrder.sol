@@ -49,7 +49,6 @@ library LongTermOrder {
             self.lastVirtualOrderTime = block.timestamp;
             return (false, 0);
         }
-        console.log("////////////////// Execute Orders //////////////////");
 
         uint160 initialSqrtPriceX96 = pool.sqrtPriceX96;
         uint256 prevTimestamp = self.lastVirtualOrderTime;
@@ -65,7 +64,6 @@ library LongTermOrder {
                         || orderPool1For0.sellRateEndingAtTime[nextExpirationTime] > 0
                 ) {
                     if (orderPool0For1.currentSellRate != 0 && orderPool1For0.currentSellRate != 0) {
-                        console.log("////////////////// Advance To New Time //////////////////");
                         pool = advanceToNewTime(
                             self,
                             poolManager,
@@ -78,7 +76,6 @@ library LongTermOrder {
                             })
                         );
                     } else {
-                        console.log("////////////////// Advance Time for Single Pool //////////////////");
                         pool = advanceTimeForSinglePoolSell(
                             self,
                             poolManager,
@@ -101,7 +98,6 @@ library LongTermOrder {
 
             if (prevTimestamp < block.timestamp && hasOutStandingOrders(self)) {
                 if (orderPool0For1.currentSellRate != 0 && orderPool1For0.currentSellRate != 0) {
-                    console.log("////////////////// Advance To New Time 2 //////////////////");
                     pool = advanceToNewTime(
                         self,
                         poolManager,
@@ -114,7 +110,6 @@ library LongTermOrder {
                         })
                     );
                 } else {
-                    console.log("////////////////// Advance Time for Single Pool 2 //////////////////");
                     pool = advanceTimeForSinglePoolSell(
                         self,
                         poolManager,
@@ -136,7 +131,6 @@ library LongTermOrder {
     }
 
     function hasOutStandingOrders(Struct.OrderState storage self) internal view returns (bool) {
-        console.log("////////////////// Has Outstanding Orders //////////////////");
         return self.orderPool0For1.currentSellRate != 0 || self.orderPool1For0.currentSellRate != 0;
     }
 
@@ -150,11 +144,10 @@ library LongTermOrder {
         int24 targetTick = nextSqrtPriceX96.getTickAtSqrtPrice();
         bool searchingLeft = nextSqrtPriceX96 < pool.sqrtPriceX96;
         bool nextTickIsFurtherThanTarget = false;
-        console.log("////////////////// isCrossingTick //////////////////");
+
         // nextTick returns the furthest tick within one word if no tick within that word is initialized
         // need to keep iterating until the tick is further than the target tick
         while (!nextTickIsFurtherThanTarget) {
-            console.log("////////////////// !NextTickIsFurtherThanTarget //////////////////");
             unchecked {
                 if (searchingLeft) nextTick -= 1;
             }
@@ -174,7 +167,6 @@ library LongTermOrder {
         Struct.TickCrossingParams memory params
     ) private returns (Struct.ExecutePool memory, uint256) {
         uint160 initializedSqrtPriceX96 = TickMath.getSqrtPriceAtTick(params.initializedTick);
-        console.log("////////////////// Advance Time Through Tick Crossing //////////////////");
 
         uint256 secondsUntilCrossingX96 = TwammMath.calculateTimeBetweenTicks(
             params.pool.liquidity,
@@ -221,8 +213,6 @@ library LongTermOrder {
 
         Struct.OrderPool storage orderPool0For1 = self.orderPool0For1;
         Struct.OrderPool storage orderPool1For0 = self.orderPool1For0;
-
-        console.log("////////////////// Advance To New Time 3 //////////////////");
 
         while (true) {
             TwammMath.ExecutionUpdateParams memory executionParams = TwammMath.ExecutionUpdateParams({
@@ -282,8 +272,6 @@ library LongTermOrder {
         uint256 currentSellRate = orderPool.currentSellRate;
         uint256 amountSelling = currentSellRate * params.secondsElapsed;
         uint256 totalRewards;
-
-        console.log("////////////////// Advance Time For Single Pool 3 //////////////////");
 
         while (true) {
             uint160 finalSqrtPriceX96 = SqrtPriceMath.getNextSqrtPriceFromInput(
@@ -354,13 +342,10 @@ library LongTermOrder {
             revert Errors.ExpirationLessThanBlocktime(orderKey.expiration);
         }
         if (sellRate == 0) revert Errors.SellRateCannotBeZero();
-        console.log("Expiration Interval: ", expirationInterval);
+
         if (orderKey.expiration % expirationInterval != 0) {
             revert Errors.ExpirationNotOnInterval(orderKey.expiration);
         }
-        console.log("Expiration Interval: ", expirationInterval);
-
-        console.log("////////////////// Internal Submit Order //////////////////");
 
         orderId = _orderId(orderKey);
         if (self.orders[orderId].sellRate != 0) revert Errors.OrderAlreadyExists(orderKey);
@@ -370,18 +355,11 @@ library LongTermOrder {
 
         unchecked {
             pool.currentSellRate += sellRate;
-            console.log("Pool Current Sale Rate", pool.currentSellRate);
+
             pool.sellRateEndingAtTime[orderKey.expiration] += sellRate;
-            console.log("Pool Sale Rate Ending At Time", pool.sellRateEndingAtTime[orderKey.expiration]);
         }
 
-        console.log("Reward Factor Last: ", pool.currentRewardFactor);
-        console.log("Sell Rate: ", sellRate);
-
         self.orders[orderId] = Struct.Order({sellRate: sellRate, rewardsFactorLast: pool.currentRewardFactor});
-
-        console.log("Reward Factor Last: ", pool.currentRewardFactor);
-        console.log("Sell Rate: ", sellRate);
     }
 
     function updateOrder(Struct.OrderState storage self, Struct.OrderKey memory orderKey, int256 amountDelta)
@@ -400,9 +378,9 @@ library LongTermOrder {
         unchecked {
             uint256 rewardFactor = orderPool.currentRewardFactor - order.rewardsFactorLast;
             buyTokensOwed = (rewardFactor * order.sellRate) >> FixedPoint96.RESOLUTION;
-            console.log("Buy Tokens Owed: ", buyTokensOwed);
+
             rewardFactorLast = orderPool.currentRewardFactor;
-            console.log("Reward Factor Last: ", rewardFactorLast);
+
             order.rewardsFactorLast = rewardFactorLast;
 
             if (orderKey.expiration <= block.timestamp) {
@@ -442,7 +420,6 @@ library LongTermOrder {
         view
         returns (Struct.Order storage)
     {
-        console.log("////////////////// Get Order //////////////////");
         return state.orders[keccak256(abi.encode(orderKey))];
     }
 

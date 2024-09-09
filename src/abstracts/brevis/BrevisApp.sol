@@ -2,6 +2,7 @@
 pragma solidity ^0.8.25;
 
 import {IBrevisProof, Brevis} from "src/interfaces/brevis/IBrevisProof.sol";
+import {console} from "forge-std/Script.sol";
 
 abstract contract BrevisApp {
     IBrevisProof public brevisProof;

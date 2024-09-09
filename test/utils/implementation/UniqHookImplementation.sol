@@ -5,10 +5,11 @@ import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
 import {UniqHook} from "src/UniqHook.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
+import {IBrevisApp} from "src/interfaces/brevis/IBrevisApp.sol";
 
 contract UniqHookImplementation is UniqHook {
-    constructor(IPoolManager _manager, uint256 interval, address brevisProof, UniqHook addressToEtch)
-        UniqHook(_manager, interval, brevisProof)
+    constructor(IPoolManager _manager, uint256 interval, IBrevisApp brevisProof_, UniqHook addressToEtch)
+        UniqHook(_manager, interval, address(brevisProof_))
     {
         Hooks.validateHookPermissions(addressToEtch, getHookPermissions());
     }

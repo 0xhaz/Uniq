@@ -18,10 +18,6 @@ contract MockBrevisProof is IBrevisProof {
         });
     }
 
-    function setSimulatedVolatility(uint256 _volatility) public {
-        simulatedVolatility = _volatility;
-    }
-
     function submitProof(uint64 chainId, bytes calldata proofWithPubInputs, bool withAppProof)
         external
         pure
