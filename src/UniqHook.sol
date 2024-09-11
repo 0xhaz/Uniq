@@ -48,6 +48,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     uint256 public immutable expirationInterval;
     bytes32 public vkHash;
     uint256 public volatility;
+    uint256[] public volatilityHistory;
 
     // Market direction tracking
     mapping(PoolId => uint256) public lastPrices;
@@ -63,7 +64,8 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     uint24 public constant MAX_FEE = 1000; // 10bps
     uint24 public constant HOOK_COMMISSION = 100; // 1bps paid to the hook to cover Brevis costs
     uint256 public constant VOLATILITY_MULTIPLIER = 10; // 1% increase in fee per 10% increase in volatility
-    uint256 public VOLATILITY_FACTOR = 1e26; //
+    uint256 public constant VOLATILITY_FACTOR = 1e26;
+    uint256 public constant SMOOTHING_FACTOR = 10;
 
     /// @notice The state of the long term orders
     mapping(PoolId => Struct.OrderState) internal orderStates;
@@ -134,7 +136,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         // calculate dynamic fee based on volatility
         uint256 priceMovement = calculateMovement(key);
         uint24 dynamicFee = adjustFee(abs(params.amountSpecified), priceMovement, key);
-        console.log("Dynamic Fee Applied: %s", dynamicFee);
+        // console.log("Dynamic Fee Applied: %s", dynamicFee);
         /// @notice Updates the pools lp fees for the a pool that has enabled dynamic lp fees.
         poolManager.updateDynamicLPFee(key, dynamicFee);
 
@@ -269,9 +271,9 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
             : (state.orderPool1For0.currentSellRate, state.orderPool1For0.currentRewardFactor);
     }
 
-    /// @dev For testing purposes only
-    function setVolatility(uint256 vol) external {
-        volatility = vol;
+    /// @inheritdoc IUniqHook
+    function getVolatilityHistory() external view returns (uint256[] memory) {
+        return volatilityHistory;
     }
 
     ///////////////////////////////////////////////////////////////////////
@@ -328,7 +330,9 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     function handleProofResult(bytes32, bytes32 vkHash_, bytes calldata circuitOutput_) internal override {
         if (vkHash != vkHash_) revert Errors.InvalidVkHash();
 
-        volatility = decodeOutput(circuitOutput_);
+        uint256 newVolatility = decodeOutput(circuitOutput_);
+        console.log("Decoded volatility: %s", newVolatility);
+        adjustVolatility(newVolatility);
     }
 
     function decodeOutput(bytes calldata output) internal pure returns (uint256) {
@@ -351,20 +355,29 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         uint256 lastPrice = lastPrices[poolId];
 
         // Store the current price for next time
-        lastPrices[poolId] = price;
-        lastTimestamp[poolId] = block.timestamp;
+        uint256 currentTime = block.timestamp;
+        uint256 lastTime = lastTimestamp[poolId];
 
-        // Calculate price movement as a percentage difference
+        // Time decay factor based on how much time has passed (e.g, decay per second)
+        uint256 timeElapsed = currentTime - lastTime;
+        uint256 decayFactor = (timeElapsed > 0) ? Math.min(timeElapsed * 1e18 / 1 days, 1e18) : 1e18; // 1 day decay
+
+        // Store the current time for next time
+        lastPrices[poolId] = price;
+        lastTimestamp[poolId] = currentTime;
+
+        // Calculate price movement as a percentage difference, with a decay factor
         if (lastPrice == 0) {
             // Initial case, no movement
             priceMovement = 0;
         } else {
-            priceMovement = (price > lastPrice)
+            uint256 rawMovement = (price > lastPrice)
                 ? ((price - lastPrice) * 1e18) / lastPrice // price increased
                 : ((lastPrice - price) * 1e18) / lastPrice; // price decreased
-        }
-        console.log("Price Movement: %s", priceMovement);
 
+            priceMovement = (rawMovement * decayFactor) / 1e18;
+        }
+        console.log("Price Movement With Decay: %s", priceMovement);
         return priceMovement;
     }
 
@@ -397,13 +410,14 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
 
         // Previous fee for this pool
         uint24 lastFee_ = lastFee[poolId];
+        console.log("Volatility from adjustFee: %s", volatility);
 
         // Base volatility fee based on price movement and volatility multiplier
         uint256 volatilityFee = (volatility * VOLATILITY_MULTIPLIER * priceMovement) / VOLATILITY_FACTOR;
         console.log("Volatility Fee: %s", volatilityFee);
 
         uint256 volumeFactor = (sqrt(volume) * volatility) / (VOLATILITY_FACTOR); // Adjust scaling factor as needed
-        console.log("Volume Factor: %s", volumeFactor);
+        // console.log("Volume Factor: %s", volumeFactor);
 
         // New dynamic fee = base fee + volatility fee + volume factor
         uint24 dynamicFee = uint24(lastFee_ + volatilityFee + volumeFactor);
@@ -418,8 +432,18 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
 
         // Store the last fee for the next calculation
         lastFee[poolId] = dynamicFee;
-        console.log("Last Fee: %s", lastFee[poolId]);
+        // console.log("Last Fee: %s", lastFee[poolId]);
 
         return dynamicFee;
+    }
+
+    function adjustVolatility(uint256 newVolatility) private {
+        console.log("Decoded volatility before adjustment: %s", newVolatility);
+        uint256 oldVolatility = volatility;
+        volatility = (volatility * (SMOOTHING_FACTOR - 1) + newVolatility) / SMOOTHING_FACTOR;
+        volatilityHistory.push(volatility);
+        console.log("Volatility after adjustment: %s", volatility);
+
+        emit UpdateVolatility(oldVolatility, volatility);
     }
 }

@@ -45,8 +45,9 @@ interface IUniqHook {
     );
 
     /// @notice Emitted when the volatility of the TWAMM is updated
-    /// @param volatility The new volatility of the TWAMM
-    event UpdateVolatility(uint256 volatility);
+    /// @param oldVolatility The old volatility of the TWAMM
+    /// @param newVolatility The new volatility of the TWAMM
+    event UpdateVolatility(uint256 oldVolatility, uint256 newVolatility);
 
     /// @notice Time interval on which orders are allowed to expire. Conserves processing needed on execute
     // function expirationInterval() external view returns (uint256);
@@ -103,4 +104,7 @@ interface IUniqHook {
         external
         view
         returns (uint256 sellRate, uint256 earningsFactor);
+
+    ///@notice Retrieve volatility history
+    function getVolatilityHistory() external view returns (uint256[] memory);
 }
