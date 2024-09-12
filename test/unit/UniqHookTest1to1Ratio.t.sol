@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.25;
+pragma solidity ^0.8.26;
 
 import {Test, console} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
@@ -34,7 +34,6 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
 
-    uint256 constant SMOOTHING_FACTOR = 10;
     bytes32 private constant VK_HASH = 0x179a48b8a2a08b246cd51cb7b78143db774a83ff75fad0d39cf0445e16773426;
 
     event SubmitOrder(
@@ -455,23 +454,23 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), volatility / SMOOTHING_FACTOR);
+        assertEq(uniqHook.volatility(), volatility / uniqHook.SMOOTHING_FACTOR());
 
-        uint24 fee = uniqHook.getFee(amountSpecified, key);
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
+
+        BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
+
+        uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("Low volatility fee: %d", fee);
 
-        BalanceDelta swapDelta = swapRouter.swap(
-            poolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-            }),
-            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false}),
-            ZERO_BYTES
-        );
-
-        assertEq(fee, 50);
+        assertEq(fee, 372);
         assertEq(swapDelta.amount0(), -1003411956170479330);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
@@ -486,24 +485,24 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), volatility / SMOOTHING_FACTOR);
+        assertEq(uniqHook.volatility(), volatility / uniqHook.SMOOTHING_FACTOR());
 
-        uint24 fee = uniqHook.getFee(amountSpecified, key);
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
+
+        BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
+
+        uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("Low volatility fee: %d", fee);
 
-        BalanceDelta swapDelta = swapRouter.swap(
-            poolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-            }),
-            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false}),
-            ZERO_BYTES
-        );
-
-        assertEq(fee, 200);
-        assertEq(swapDelta.amount0(), -11042574596848663291193);
+        assertEq(fee, 372);
+        assertEq(swapDelta.amount0(), -11040918127835685342803);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -517,24 +516,24 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), volatility / 10);
+        assertEq(uniqHook.volatility(), volatility / uniqHook.SMOOTHING_FACTOR());
 
-        uint24 fee = uniqHook.getFee(amountSpecified, key);
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
+
+        BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
+
+        uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("Medium volatility fee: %d", fee);
 
-        BalanceDelta swapDelta = swapRouter.swap(
-            poolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-            }),
-            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false}),
-            ZERO_BYTES
-        );
-
-        assertEq(fee, 60);
-        assertEq(swapDelta.amount0(), -1003421990892124334);
+        assertEq(fee, 468);
+        assertEq(swapDelta.amount0(), -1003422994375327701);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -548,24 +547,24 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), volatility / 10);
+        assertEq(uniqHook.volatility(), volatility / uniqHook.SMOOTHING_FACTOR());
 
-        uint24 fee = uniqHook.getFee(amountSpecified, key);
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
+
+        BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
+
+        uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("Medium volatility fee: %d", fee);
 
-        BalanceDelta swapDelta = swapRouter.swap(
-            poolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-            }),
-            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false}),
-            ZERO_BYTES
-        );
-
-        assertEq(fee, 600);
-        assertEq(swapDelta.amount0(), -11046994278496391393371);
+        assertEq(fee, 468);
+        assertEq(swapDelta.amount0(), -11041039585343999542509);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -579,24 +578,24 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(highVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(highVolatility));
 
-        assertEq(uniqHook.volatility(), highVolatility / SMOOTHING_FACTOR);
+        assertEq(uniqHook.volatility(), highVolatility / uniqHook.SMOOTHING_FACTOR());
 
-        uint24 fee = uniqHook.getFee(amountSpecified, key);
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
+
+        BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
+
+        uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("High volatility fee: %d", fee);
 
-        BalanceDelta swapDelta = swapRouter.swap(
-            poolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-            }),
-            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false}),
-            ZERO_BYTES
-        );
-
-        assertEq(fee, 100);
-        assertEq(swapDelta.amount0(), -1003462131785849391);
+        assertEq(fee, 660);
+        assertEq(swapDelta.amount0(), -1003487221475355226);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -610,40 +609,46 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(highVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(highVolatility));
 
-        assertEq(uniqHook.volatility(), highVolatility / SMOOTHING_FACTOR);
+        assertEq(uniqHook.volatility(), highVolatility / uniqHook.SMOOTHING_FACTOR());
 
-        uint24 fee = uniqHook.getFee(amountSpecified, key);
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
+
+        BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
+
+        uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("High volatility fee: %d", fee);
 
-        BalanceDelta swapDelta = swapRouter.swap(
-            poolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-            }),
-            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false}),
-            ZERO_BYTES
-        );
-
-        assertEq(fee, 1000);
-        assertEq(swapDelta.amount0(), -11051417499428722280816);
+        assertEq(fee, 660);
+        assertEq(swapDelta.amount0(), -11041746300216820661119);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
     }
 
-    function testUniqHook1to1_SmoothingFactor_ReducesPriceMovementOverTime() public {
+    function testUniqHook1to1_FluctuateVolatility_PriceMovementOverTime() public {
         int256 amountSpecified = 10 ether; // Swap amount
-        uint248 initialVolatility = 50e18; // Initial volatility (50%)
+        uint248 initialVolatility = 70e18; // Initial volatility (70%)
 
         // Simulate an initial high volatility environment
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(initialVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(initialVolatility));
-        assertEq(uniqHook.volatility(), initialVolatility / SMOOTHING_FACTOR); // Should be 5e18
+        assertEq(uniqHook.volatility(), initialVolatility / uniqHook.SMOOTHING_FACTOR());
+
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
 
         // Perform an initial swap to set a price change
-        uint24 initialFee = uniqHook.getFee(amountSpecified, poolKey);
+        uint24 initialFee = uniqHook.getFee(amountSpecified, poolKey, params);
         console.log("Initial fee before 1-hour wait: %d", initialFee);
 
         modifyLiquidityRouter.modifyLiquidity(
@@ -651,7 +656,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: -60,
                 tickUpper: 60,
-                liquidityDelta: 100000 ether,
+                liquidityDelta: 10000 ether,
                 salt: bytes32(0)
             }),
             ZERO_BYTES
@@ -668,19 +673,25 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
             ZERO_BYTES
         );
 
-        assertEq(initialFee, 158); // Expected high initial fee due to volatility and movement
-        assertEq(swapDelta.amount0(), -10004158422447174832);
+        assertEq(initialFee, 74); // Expected high initial fee due to volatility and movement
+        assertEq(swapDelta.amount0(), -10019737910894373480);
 
         vm.warp(block.timestamp + 1 hours); // Wait 1 hour
-        uint248 decayedVolatility = 40e18;
+        uint248 decayedVolatility = 60e18;
         int256 amountSpecified2 = 20 ether;
 
         // Simulate a lower volatility environment after 1 hour
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(decayedVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(decayedVolatility));
-        assertEq(uniqHook.volatility(), 8500000000000000000);
+        assertEq(uniqHook.volatility(), 12300000000000000000);
 
-        uint24 newFee = uniqHook.getFee(amountSpecified, poolKey);
+        IPoolManager.SwapParams memory params2 = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified2,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        uint24 newFee = uniqHook.getFee(amountSpecified, poolKey, params2);
         console.log("New fee after 1-hour wait: %d", newFee);
 
         swapDelta = swapRouter.swap(
@@ -695,18 +706,24 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         );
 
         assertEq(newFee, 1000); // Expected lower fee due to decayed volatility
-        assertEq(swapDelta.amount0(), -20028006663711359846);
+        assertEq(swapDelta.amount0(), -20098013725844605033);
 
         vm.warp(block.timestamp + 6 hours); // Wait 6 hours
-        uint248 decayedVolatility2 = 30e18;
+        uint248 decayedVolatility2 = 50e18;
         int256 amountSpecified3 = 30 ether;
 
         // Simulate a lower volatility environment after 6 hours
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(decayedVolatility2)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(decayedVolatility2));
-        assertEq(uniqHook.volatility(), 10650000000000000000);
+        assertEq(uniqHook.volatility(), 16070000000000000000);
 
-        uint24 newFee2 = uniqHook.getFee(amountSpecified, poolKey);
+        IPoolManager.SwapParams memory params3 = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified3,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        uint24 newFee2 = uniqHook.getFee(amountSpecified, poolKey, params3);
         console.log("New fee after 6-hour wait: %d", newFee2);
 
         swapDelta = swapRouter.swap(
@@ -721,18 +738,24 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         );
 
         assertEq(newFee2, 1000); // Expected lower fee due to decayed volatility
-        assertEq(swapDelta.amount0(), -30056995036466664190);
+        assertEq(swapDelta.amount0(), -42040909168911006146);
 
         vm.warp(block.timestamp + 12 hours); // Wait 12 hours
-        uint248 decayedVolatility3 = 20e18;
+        uint248 decayedVolatility3 = 40e18;
         int256 amountSpecified4 = 30 ether;
 
         // Simulate a lower volatility environment after 12 hours
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(decayedVolatility3)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(decayedVolatility3));
-        assertEq(uniqHook.volatility(), 11585000000000000000);
+        assertEq(uniqHook.volatility(), 18463000000000000000);
 
-        uint24 newFee3 = uniqHook.getFee(amountSpecified, poolKey);
+        IPoolManager.SwapParams memory params4 = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified4,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        uint24 newFee3 = uniqHook.getFee(amountSpecified, poolKey, params4);
         console.log("New fee after 12-hour wait: %d", newFee3);
 
         swapDelta = swapRouter.swap(
@@ -747,18 +770,24 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         );
 
         assertEq(newFee3, 1000); // Expected lower fee due to decayed volatility
-        assertEq(swapDelta.amount0(), -30074991441038942404);
+        assertEq(swapDelta.amount0(), -103753498983469189826);
 
         vm.warp(block.timestamp + 24 hours); // Wait 24 hours
-        uint248 decayedVolatility4 = 10e18;
+        uint248 decayedVolatility4 = 30e18;
         int256 amountSpecified5 = 40 ether;
 
         // Simulate a lower volatility environment after 24 hours
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(decayedVolatility4)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(decayedVolatility4));
-        assertEq(uniqHook.volatility(), 11426500000000000000);
+        assertEq(uniqHook.volatility(), 19616700000000000000);
 
-        uint24 newFee4 = uniqHook.getFee(amountSpecified, poolKey);
+        IPoolManager.SwapParams memory params5 = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified5,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        uint24 newFee4 = uniqHook.getFee(amountSpecified, poolKey, params5);
         console.log("New fee after 24-hour wait: %d", newFee4);
 
         swapDelta = swapRouter.swap(
@@ -773,33 +802,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         );
 
         assertEq(newFee4, 1000); // Expected lower fee due to decayed volatility
-        assertEq(swapDelta.amount0(), -40128010942061742858);
-
-        vm.warp(block.timestamp + 48 hours); // Wait 48 hours
-        uint248 decayedVolatility5 = 5e18;
-        int256 amountSpecified6 = 50 ether;
-
-        // Simulate a lower volatility environment after 48 hours
-        brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(decayedVolatility5)), VK_HASH);
-        uniqHook.brevisCallback(bytes32(0), abi.encodePacked(decayedVolatility5));
-        assertEq(uniqHook.volatility(), 10783850000000000000);
-
-        uint24 newFee5 = uniqHook.getFee(amountSpecified, poolKey);
-        console.log("New fee after 48-hour wait: %d", newFee5);
-
-        swapDelta = swapRouter.swap(
-            poolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: amountSpecified6,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-            }),
-            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false}),
-            ZERO_BYTES
-        );
-
-        assertEq(newFee5, 1000); // Expected lower fee due to decayed volatility
-        assertEq(swapDelta.amount0(), -50205103582001688621);
+        assertEq(swapDelta.amount0(), -11514031918428910892703);
     }
 
     function testTrackVolatilityChanges() public {
@@ -818,7 +821,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(newVolatility));
         console.log("Volatility after second update: %s", uniqHook.volatility());
         // Calculate expected volatility manually using the smoothing formula and assert it
-        uint256 expectedVolatility = (5e18 * (SMOOTHING_FACTOR - 1) + 40e18) / SMOOTHING_FACTOR;
+        uint256 expectedVolatility = (5e18 * (uniqHook.SMOOTHING_FACTOR() - 1) + 40e18) / uniqHook.SMOOTHING_FACTOR();
         assertEq(uniqHook.volatility(), expectedVolatility);
 
         // Update volatility again

@@ -107,4 +107,13 @@ interface IUniqHook {
 
     ///@notice Retrieve volatility history
     function getVolatilityHistory() external view returns (uint256[] memory);
+
+    /// @notice Retrieve Dynamic Fee
+    /// @param amount The amount to calculate the fee for
+    /// @param key The pool key of the pool to calculate the fee for
+    /// @param params The parameters for the fee calculation
+    /// @return fee The fee amount
+    function getFee(int256 amount, PoolKey calldata key, IPoolManager.SwapParams calldata params)
+        external
+        returns (uint24 fee);
 }
