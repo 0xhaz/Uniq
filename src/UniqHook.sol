@@ -23,7 +23,7 @@ import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Constants} from "src/libraries/Constants.sol";
-import {Oracle} from "src/libraries/Oracle.sol";
+import {Oracle, AggregatorV3Interface} from "src/libraries/Oracle.sol";
 import {LongTermOrder} from "src/libraries/LongTermOrder.sol";
 import {Struct} from "src/libraries/Struct.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
@@ -31,6 +31,7 @@ import {BrevisApp, IBrevisProof} from "src/abstracts/brevis/BrevisApp.sol";
 import {Errors} from "src/libraries/Errors.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Volatility} from "src/libraries/Volatility.sol";
+import {DynamicFees} from "src/libraries/DynamicFees.sol";
 import {console} from "forge-std/Console.sol";
 
 contract UniqHook is BaseHook, IUniqHook, BrevisApp {
@@ -50,6 +51,11 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     bytes32 public vkHash;
     uint256 public volatility;
     uint256[] public volatilityHistory;
+    AggregatorV3Interface public priceFeed;
+    Struct.Observation[65535] public observations;
+    uint256 public lastOraclePrice;
+    uint256 public lastOracleUpdate;
+    uint256 lastUpdateTime;
 
     // Market direction tracking
     mapping(PoolId => uint256) public lastPrices;
@@ -60,26 +66,18 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     mapping(PoolId => uint256) public lowestPrice;
     mapping(PoolId => uint256) public largestVolume;
 
-    uint24 public constant BASE_FEE = 200; // 2bps
-    uint24 public constant MIN_FEE = 50; // 0.5bps
-    uint24 public constant MAX_FEE = 1000; // 10bps
-    uint24 public constant HOOK_COMMISSION = 100; // 1bps paid to the hook to cover Brevis costs
-    uint256 public constant VOLATILITY_MULTIPLIER = 10; // 1% increase in fee per 10% increase in volatility
-    uint256 public constant VOLATILITY_FACTOR = 1e26;
-    uint256 public constant SMOOTHING_FACTOR = 10;
-    uint256 public constant MAX_VOLATILITY_CHANGE_PCT = 20 * 1e16; // 20%
-
     /// @notice The state of the long term orders
     mapping(PoolId => Struct.OrderState) internal orderStates;
 
     /// @notice The amount of tokens owed to each user
     mapping(Currency token => mapping(address owner => uint256)) public tokensOwed;
 
-    constructor(IPoolManager poolManager, uint256 expirationInterval_, address brevisProof_)
+    constructor(IPoolManager poolManager, uint256 expirationInterval_, address brevisProof_, address priceFeed_)
         BaseHook(poolManager)
         BrevisApp(IBrevisProof(brevisProof_))
     {
         expirationInterval = expirationInterval_;
+        priceFeed = AggregatorV3Interface(priceFeed_);
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -136,9 +134,10 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         executeTWAMMOrders(key);
 
         // calculate dynamic fee based on volatility
-        uint256 priceMovement = calculateMovement(key);
-        uint24 dynamicFee = adjustFee(abs(params.amountSpecified), priceMovement, key, params);
-        // console.log("Dynamic Fee Applied: %s", dynamicFee);
+        uint256 priceMovement = DynamicFees.calculateMovement(key, poolManager, volatility, lastPrices, lastTimestamp);
+
+        uint24 dynamicFee = adjustFee(DynamicFees.abs(params.amountSpecified), priceMovement, key, params);
+
         /// @notice Updates the pools lp fees for the a pool that has enabled dynamic lp fees.
         poolManager.updateDynamicLPFee(key, dynamicFee);
 
@@ -153,7 +152,9 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     /// @inheritdoc IUniqHook
     function executeTWAMMOrders(PoolKey memory key) public {
         PoolId id = key.toId();
+
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(id);
+
         Struct.OrderState storage state = orderStates[id];
 
         (bool zeroForOne, uint160 sqrtPriceLimitX96) = LongTermOrder.executeOrders(
@@ -287,8 +288,12 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         external
         returns (uint24)
     {
-        uint256 priceMovement = calculateMovement(key);
-        return adjustFee(abs(amount), priceMovement, key, params);
+        uint256 priceMovement = DynamicFees.calculateMovement(key, poolManager, volatility, lastPrices, lastTimestamp);
+        if (priceMovement == 0) {
+            return lastFee[key.toId()];
+        }
+
+        return adjustFee(DynamicFees.abs(amount), priceMovement, key, params);
     }
 
     /*/////////////////////////////////////////////////////////////////////
@@ -327,7 +332,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         uint256 tokenAmount =
             swapParams.amountSpecified < 0 ? uint256(-swapParams.amountSpecified) : uint256(swapParams.amountSpecified);
 
-        uint256 fee = Math.mulDiv(tokenAmount, HOOK_COMMISSION, 10_000);
+        uint256 fee = Math.mulDiv(tokenAmount, Constants.HOOK_COMMISSION, 10_000);
 
         // determine inbound token based on 0 or 1 or 1 or 0 swap
         Currency inboundToken = swapParams.zeroForOne ? key.currency0 : key.currency1;
@@ -345,30 +350,26 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         IPoolManager.SwapParams calldata params
     ) internal returns (uint24) {
         PoolId poolId = key.toId();
-        uint24 lastFee_ = lastFee[poolId] == 0 ? BASE_FEE : lastFee[poolId];
+        uint24 lastFee_ = lastFee[poolId] == 0 ? Constants.BASE_FEE : lastFee[poolId];
 
         (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(poolId);
         uint128 liquidity = poolManager.getLiquidity(poolId);
 
         uint160 currentSqrtPrice = sqrtPriceX96;
-        console.log("Current sqrt price before swap: %d", currentSqrtPrice);
         int24 currentTick = tick;
-        console.log("Current tick before swap: %d", currentTick);
+
+        uint256 volatilityFee = DynamicFees.calculateVolatilityFee(priceMovement, volatility);
 
         // Directional multiplier: higher for aggresive trades, lower for passive trades
         bool isAggressive = (priceMovement > 0 && params.zeroForOne) || (priceMovement < 0 && !params.zeroForOne);
-        uint256 directionalMultiplier = calculateDirectionalMultiplier(isAggressive, priceMovement, volume, liquidity);
+        uint256 directionalMultiplier =
+            DynamicFees.calculateDirectionalMultiplier(isAggressive, priceMovement, volume, liquidity);
         console.log("Directional Multiplier: %s", directionalMultiplier);
-
-        // Volatility fee adjustment
-        uint256 volatilityFee = calculateVolatilityFee(priceMovement);
-        console.log("Volatility Fee: %s", volatilityFee);
 
         // Volume factor and liquidity-based adjustment using new function
         uint24 liquidityAdjustedFee =
-            adjustFeeBasedOnLiquidity(volume, currentSqrtPrice, currentTick, liquidity, key.tickSpacing);
-        console.log("Liquidity Adjusted Fee: %s", liquidityAdjustedFee);
-        console.log("Volume: %s, Liquidity: %s", volume, liquidity);
+            DynamicFees.adjustFeeBasedOnLiquidity(volume, currentSqrtPrice, currentTick, liquidity, key.tickSpacing);
+       
         uint256 dynamicFee = lastFee_ + volatilityFee + liquidityAdjustedFee;
 
         // directional multiplier at conservative trades
@@ -378,10 +379,10 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         console.log("Dynamic Fee before clamping: %s", dynamicFee);
 
         // Clamp the fee to the min and max
-        if (dynamicFee < MIN_FEE) {
-            dynamicFee = MIN_FEE;
-        } else if (dynamicFee > MAX_FEE) {
-            dynamicFee = MAX_FEE;
+        if (dynamicFee < Constants.MIN_FEE) {
+            dynamicFee = Constants.MIN_FEE;
+        } else if (dynamicFee > Constants.MAX_FEE) {
+            dynamicFee = Constants.MAX_FEE;
         }
 
         console.log("Final Dynamic Fee: %s", dynamicFee);
@@ -393,6 +394,52 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         }
 
         return uint24(dynamicFee);
+    }
+
+    function updateObservation(PoolKey calldata key, int24 tick, uint128 liquidity) internal {
+        Struct.OrderState storage state = orderStates[key.toId()];
+        Struct.Observation[65535] storage obs = orderStates[key.toId()].observations;
+        uint16 index = state.observationState.index;
+        uint16 cardinality = state.observationState.cardinality;
+        uint16 cardinalityNext = state.observationState.cardinalityNext;
+
+        uint32 timestamp = uint32(block.timestamp);
+
+        if (timestamp - lastOracleUpdate > 60) {
+            (, int256 oraclePrice,,,) = Oracle.staleCheckLatestRoundData(priceFeed);
+
+            lastOraclePrice = uint256(oraclePrice);
+            lastOracleUpdate = timestamp;
+        }
+
+        // Calculate the internal price using tick (assuming tick -> price conversion logic exists)
+        uint256 internalPrice = DynamicFees.calculateInternalPriceFromTick(tick);
+
+        // Get price tolerance and dynamically adjust based on volatility
+        uint256 tolerance = DynamicFees.getPriceTolerance();
+
+        // adjust tolerance based on market conditions (volatility, time decay, etc)
+        tolerance += (volatility / 1e18) * 1e14;
+        tolerance = tolerance > 1e16 ? 1e16 : tolerance;
+
+        // Validate internal price agains the oracle price
+        if (DynamicFees.abs(int256(internalPrice) - int256(lastOraclePrice)) > tolerance) {
+            revert Errors.PriceDeviation();
+        }
+
+        Oracle.write(obs, index, timestamp, tick, liquidity, cardinality, cardinalityNext);
+
+        state.observationState.index = (index + 1 == cardinalityNext) ? 0 : index + 1;
+
+        if (cardinalityNext > cardinality && state.observationState.index == 0) {
+            state.observationState.cardinality = cardinalityNext;
+        }
+    }
+
+    function initializeOrderState(PoolId poolId) internal {
+        Struct.OrderState storage state = orderStates[poolId];
+
+        state.observationState = Struct.ObservationState({index: 0, cardinality: 1, cardinalityNext: 1});
     }
 
     /*/////////////////////////////////////////////////////////////////////
@@ -420,141 +467,25 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
                             Private Functions                          
     /////////////////////////////////////////////////////////////////////*/
 
-    function calculateMovement(PoolKey calldata key) private returns (uint256 priceMovement) {
-        // calculate the price movement from the last block
-        PoolId poolId = key.toId();
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
-
-        // Calculate the price from sqrtPriceX96
-        uint256 price = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) / FixedPoint96.Q96;
-        uint256 lastPrice = lastPrices[poolId];
-
-        // Store the current price for next time
-        uint256 currentTime = block.timestamp;
-        uint256 lastTime = lastTimestamp[poolId];
-
-        // Time decay factor based on how much time has passed (e.g, decay per second)
-        uint256 timeElapsed = currentTime - lastTime;
-        uint256 decayFactor = (timeElapsed > 0) ? Math.min((timeElapsed * 1e18) / 1 days, 1e18) : 1e18; // 1 day decay
-
-        // Store the current time for next time
-        lastPrices[poolId] = price;
-        lastTimestamp[poolId] = currentTime;
-
-        // Calculate price movement as a percentage difference, with a decay factor
-        if (lastPrice == 0) {
-            // Initial case, no movement
-            priceMovement = (volatility > 0) ? volatility / 1e10 : 1e16;
-        } else {
-            uint256 rawMovement = (price > lastPrice)
-                ? ((price - lastPrice) * 1e18) / lastPrice // price increased
-                : ((lastPrice - price) * 1e18) / lastPrice; // price decreased
-
-            priceMovement = (rawMovement * decayFactor) / 1e18;
-        }
-        console.log("Price Movement With Decay: %s", priceMovement);
-        return priceMovement;
-    }
-
     function adjustVolatility(uint256 newVolatility) private {
-        console.log("Decoded volatility before adjustment: %s", newVolatility);
+        uint256 timeElapsed = block.timestamp - lastUpdateTime;
+        uint256 decayFactor = DynamicFees.calculateTimeDecayFactor(timeElapsed);
+
+        // Adjust the volatility based on the decay factor
+        volatility = (volatility * decayFactor) / 1e18;
+        lastUpdateTime = block.timestamp;
+
         uint256 oldVolatility = volatility;
 
-        volatility = (volatility * (SMOOTHING_FACTOR - 1) + newVolatility) / SMOOTHING_FACTOR;
+        uint256 volatilityChange =
+            (newVolatility > oldVolatility) ? newVolatility - oldVolatility : oldVolatility - newVolatility;
+        uint256 dynamicSmoothingFactor =
+            volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT ? 5 : Constants.SMOOTHING_FACTOR;
+
+        volatility = (volatility * (dynamicSmoothingFactor - 1) + newVolatility) / dynamicSmoothingFactor;
         volatilityHistory.push(volatility);
         console.log("Volatility after adjustment: %s", volatility);
 
         emit UpdateVolatility(oldVolatility, volatility);
-    }
-
-    function adjustFeeBasedOnLiquidity(
-        uint256 volume,
-        uint160 sqrtPriceX96,
-        int24 tick,
-        uint128 liquidity,
-        int24 tickSpacing
-    ) private pure returns (uint24) {
-        if (liquidity == 0) {
-            return MAX_FEE;
-        }
-        // Compute the TVL at the current tick
-        uint256 tickTVL = Volatility.computeTickTVLX64(tickSpacing, tick, sqrtPriceX96, liquidity);
-
-        // A larger TVL indicates deeper liquidity, hence lower fee impact
-        if (tickTVL == 0) {
-            return MAX_FEE; // if no liquidity, set fee to max
-        }
-
-        // volume-to-liquidity ratio to determine fee adjustment
-        uint256 volumeToLiquidityRatio = Math.mulDiv(volume, 1e18, tickTVL);
-        console.log("Volume-to-Liquidity Ratio: %s", volumeToLiquidityRatio);
-
-        // Higher ratio = higher fee, lower ratio = lower fee
-        if (volumeToLiquidityRatio > 1e18) {
-            return MAX_FEE; // if volume is greater than liquidity, set fee to max
-        } else if (volumeToLiquidityRatio < 1e16) {
-            return MIN_FEE; // if volume is less than 1% of liquidity, set fee to min
-        } else {
-            // scale fee linearly based on ratio
-            return uint24(Math.mulDiv(volumeToLiquidityRatio, MAX_FEE - MIN_FEE, 1e18) + MIN_FEE);
-        }
-    }
-
-    function calculateVolatilityFee(uint256 priceMovement) private view returns (uint256) {
-        uint256 movementFactor = priceMovement > 0 ? priceMovement : 1e16;
-        return (volatility * VOLATILITY_MULTIPLIER * movementFactor) / VOLATILITY_FACTOR;
-    }
-
-    function calculateDirectionalMultiplier(bool isAggressive, uint256 priceMovement, uint256 volume, uint128 liquidity)
-        private
-        pure
-        returns (uint256)
-    {
-        // Base directional multiplier for passive trade is 1
-        uint256 baseMultiplier = isAggressive ? 1 : 1;
-
-        if (isAggressive) {
-            // Scale multiplier based on price movement (larger movement = larger fee multiplier)
-            if (priceMovement > 1e18) {
-                baseMultiplier = 2; // slightly aggressive
-            }
-            if (priceMovement > 5e18) {
-                baseMultiplier = 3; // moderately aggressive
-            }
-            if (priceMovement > 10e18) {
-                baseMultiplier = 4; // highly aggressive
-            }
-
-            if (liquidity > 0) {
-                // Adjust multiplier based on trade size relative to liquidity
-                uint256 volumeToLiquidityRatio = Math.mulDiv(volume, 1e18, liquidity); // safe division
-                if (volumeToLiquidityRatio > 5e17) {
-                    baseMultiplier += 1; // if trade size is greater than 50% of liquidity, increase multiplier
-                }
-                if (volumeToLiquidityRatio > 1e18) {
-                    baseMultiplier += 2; // if trade size is greater than liquidity, increase multiplier
-                }
-            } else {
-                baseMultiplier += 2; // if no liquidity, increase multiplier
-            }
-        }
-
-        return baseMultiplier;
-    }
-
-    function abs(int256 x) private pure returns (uint256) {
-        return x >= 0 ? uint256(x) : uint256(-x);
-    }
-
-    function sqrt(uint256 x) private pure returns (uint256 y) {
-        assembly {
-            // Compute square root of `x` using optimized assembly
-            let z := add(div(x, 2), 1)
-            y := x
-            for {} lt(z, y) {} {
-                y := z
-                z := div(add(div(x, z), z), 2)
-            }
-        }
     }
 }

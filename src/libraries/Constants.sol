@@ -65,4 +65,20 @@ library Constants {
 
     /// @notice Offset for the Pool Bitmap
     uint256 constant TICK_BITMAP_OFFSET = 5;
+
+    uint256 public constant SMOOTHING_FACTOR = 10;
+
+    uint256 public constant MAX_VOLATILITY_CHANGE_PCT = 20 * 1e16; // 20%
+
+    uint24 public constant BASE_FEE = 200; // 2bps
+
+    uint24 public constant MIN_FEE = 50; // 0.5bps
+
+    uint24 public constant MAX_FEE = 1000; // 10bps
+
+    uint256 public constant VOLATILITY_MULTIPLIER = 10; // 1% increase in fee per 10% increase in volatility
+
+    uint256 public constant VOLATILITY_FACTOR = 1e26;
+
+    uint24 public constant HOOK_COMMISSION = 100; // 1bps paid to the hook to cover Brevis costs
 }

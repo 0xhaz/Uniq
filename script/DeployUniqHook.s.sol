@@ -7,16 +7,22 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {HelperConfig} from "script/HelperConfig.sol";
 import {UniqHook} from "src/UniqHook.sol";
 import {IBrevisApp} from "src/interfaces/brevis/IBrevisApp.sol";
+import {MockV3Aggregator} from "test/mocks/MockV3Aggregator.sol";
 
 contract DeployUniqHook is Script {
     HelperConfig helperConfig = new HelperConfig();
     IPoolManager poolManager;
     UniqHook uniqHook;
     address brevisProof;
+    address priceFeedMock;
 
     function run() external returns (address) {
         UniqHookImplementation impl = new UniqHookImplementation(
-            poolManager, helperConfig.EXPIRATION_INTERVAL(), IBrevisApp(brevisProof), uniqHook
+            poolManager,
+            helperConfig.EXPIRATION_INTERVAL(),
+            IBrevisApp(brevisProof),
+            MockV3Aggregator(priceFeedMock),
+            uniqHook
         );
         console.log("UniqHook deployed at: ", address(impl));
         return address(impl);

@@ -6,11 +6,16 @@ import {UniqHook} from "src/UniqHook.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {IBrevisApp} from "src/interfaces/brevis/IBrevisApp.sol";
+import {MockV3Aggregator} from "test/mocks/MockV3Aggregator.sol";
 
 contract UniqHookImplementation is UniqHook {
-    constructor(IPoolManager _manager, uint256 interval, IBrevisApp brevisProof_, UniqHook addressToEtch)
-        UniqHook(_manager, interval, address(brevisProof_))
-    {
+    constructor(
+        IPoolManager _manager,
+        uint256 interval,
+        IBrevisApp brevisProof_,
+        MockV3Aggregator priceFeedMock,
+        UniqHook addressToEtch
+    ) UniqHook(_manager, interval, address(brevisProof_), address(priceFeedMock)) {
         Hooks.validateHookPermissions(addressToEtch, getHookPermissions());
     }
 

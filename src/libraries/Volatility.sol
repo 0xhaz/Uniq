@@ -10,12 +10,8 @@ import {TickMath} from "v4-core/libraries/TickMath.sol";
 /// @notice Provides functions that use Uniswap V4 to compute price volatility
 library Volatility {
     struct PoolMetadata {
-        // the olders oracle observation that's been populated by the pool
-        uint32 maxSecondsAgo;
-        // the overall fee minus the protocol fee for token0, times 1e6
-        uint24 gamma0;
-        // the overall fee minus the protocol fee for token1, times 1e6
-        uint24 gamma1;
+        // base dynamic fee of the pool
+        uint24 baseFee;
         // the pool tick spacing
         int24 tickSpacing;
     }
@@ -25,8 +21,6 @@ library Volatility {
         uint160 sqrtPriceX96;
         // the current tick (from pool.slot0())
         int24 currentTick;
-        // the mean tick over some period (from OracleLibrary.consult())
-        int24 arithmeticMeanTick;
         // the mean liquidity over some period (from OracleLibrary.consult())
         uint160 secondsPerLiquidityX128;
         // the number of seconds to look back when getting mean tick and mean liquidity
@@ -65,20 +59,20 @@ library Volatility {
                 b.feeGrowthGlobal0X128,
                 data.secondsPerLiquidityX128,
                 data.oracleLookback,
-                metadata.gamma1
+                metadata.baseFee
             );
             uint128 revenue1Gamma0 = computeRevenueGamma(
                 a.feeGrowthGlobal1X128,
                 b.feeGrowthGlobal1X128,
                 data.secondsPerLiquidityX128,
                 data.oracleLookback,
-                metadata.gamma0
+                metadata.baseFee
             );
 
             // This is an approximation. Ideally the fees earned during each swap would be multiplied by the price
             // *at that swap*. But for prices simulated with GBM and swap sizes either normally or uniformly distributed,
             // the error you get from using geometric mean price is <1% even with high drift and volatility.
-            volumeGamma0Gamma1 = revenue1Gamma0 + amount0ToAmount1(revenue0Gamma1, data.arithmeticMeanTick);
+            volumeGamma0Gamma1 = revenue1Gamma0 + amount0ToAmount1(revenue0Gamma1, data.currentTick);
         }
 
         uint128 sqrtTickTVLX32 = uint128(
@@ -116,7 +110,7 @@ library Volatility {
      * @param feeGrowthGlobalBX128 The value of feeGrowthGlobal (either 0 or 1, but matching) at time B (B > A)
      * @param secondsPerLiquidityX128 The difference in the secondsPerLiquidity accumulator from `secondsAgo` seconds ago until now
      * @param secondsAgo The oracle lookback period that was used to find `secondsPerLiquidityX128`
-     * @param gamma The fee factor to scale by
+     * @param baseFee The fee factor to scale by
      * @return Revenue over the period from `block.timestamp - secondsAgo` to `block.timestamp`, scaled down by a factor of gamma
      */
     function computeRevenueGamma(
@@ -124,20 +118,14 @@ library Volatility {
         uint256 feeGrowthGlobalBX128,
         uint160 secondsPerLiquidityX128,
         uint32 secondsAgo,
-        uint24 gamma
+        uint24 baseFee
     ) internal pure returns (uint128) {
         unchecked {
-            uint256 temp;
+            uint256 temp = feeGrowthGlobalBX128 >= feeGrowthGlobalAX128
+                ? feeGrowthGlobalBX128 - feeGrowthGlobalAX128
+                : type(uint256).max + feeGrowthGlobalAX128 - feeGrowthGlobalBX128;
 
-            if (feeGrowthGlobalBX128 >= feeGrowthGlobalAX128) {
-                // feeGrowthGlobal has increased from time A to time B
-                temp = feeGrowthGlobalBX128 - feeGrowthGlobalAX128;
-            } else {
-                // feeGrowthGlobal has overflowed from time A to time B
-                temp = type(uint256).max + feeGrowthGlobalAX128 - feeGrowthGlobalBX128;
-            }
-
-            temp = FullMath.mulDiv(temp, secondsAgo * gamma, secondsPerLiquidityX128 * 1e6);
+            temp = FullMath.mulDiv(temp, secondsAgo * baseFee, secondsPerLiquidityX128 * 1e6);
             return temp > type(uint128).max ? type(uint128).max : uint128(temp);
         }
     }

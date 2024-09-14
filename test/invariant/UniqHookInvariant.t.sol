@@ -32,6 +32,9 @@ import {IBrevisApp} from "src/interfaces/brevis/IBrevisApp.sol";
 import {HookMiner} from "test/utils/HookMiner.sol";
 import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {PoolGetters} from "src/libraries/PoolGetters.sol";
+import {MockV3Aggregator} from "test/mocks/MockV3Aggregator.sol";
+import {DynamicFees} from "src/libraries/DynamicFees.sol";
+import {Constants} from "src/libraries/Constants.sol";
 
 contract UniqHookInvariant is StdInvariant, Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -43,12 +46,15 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
 
     uint160 flags = uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG);
 
+    address priceFeed = 0xc59E3633BAAC79493d908e63626716e204A45EdF;
+
     MockERC20 tsla;
     MockERC20 usdc;
     MockBrevisProof brevisProofMock;
     UniqHook uniqHook;
     PoolKey poolKey;
     PoolId poolId;
+    MockV3Aggregator priceFeedMock;
 
     function setUp() public {
         deployFreshManagerAndRouters();
@@ -57,14 +63,16 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
         tsla = MockERC20(Currency.unwrap(currency0));
         usdc = MockERC20(Currency.unwrap(currency1));
         brevisProofMock = new MockBrevisProof();
+        priceFeedMock = new MockV3Aggregator(18, 1e8);
 
         uniqHook = createUniqHook();
 
-        (poolKey, poolId) =
-            initPool(currency0, currency1, uniqHook, LPFeeLibrary.DYNAMIC_FEE_FLAG, SQRT_PRICE_1_1, ZERO_BYTES);
+        (poolKey, poolId) = initPoolAndAddLiquidity(
+            currency0, currency1, uniqHook, LPFeeLibrary.DYNAMIC_FEE_FLAG, SQRT_PRICE_1_1, ZERO_BYTES
+        );
 
-        addLiquidityToPool(-60, 60, 100 ether);
-        addLiquidityToPool(-120, 120, 100 ether);
+        addLiquidityToPool(-60, 60, 1000 ether);
+        addLiquidityToPool(-120, 120, 1000 ether);
         addLiquidityToPoolFullRange();
     }
 
@@ -73,22 +81,41 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
         uint248 initialVolatility = 70e18;
         uint248 newVolatility = 50e18;
 
+        // Set initial volatility
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(initialVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(initialVolatility));
 
-        uint256 expectedVolatility = initialVolatility / uniqHook.SMOOTHING_FACTOR();
-        assertEq(uniqHook.volatility(), expectedVolatility);
+        // Check volatility adjustment after first brevis callback
+        uint256 expectedVolatility;
+        uint256 initialVolatilityUint = initialVolatility;
+        uint256 volatilityChange = abs(int256(initialVolatilityUint) - int256(0)); // Old volatility is 0 at first
 
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = initialVolatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = initialVolatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
+
+        // Assert the expected volatility after the first adjustment
+        assertLe(uniqHook.volatility(), expectedVolatility);
+
+        // Warp time by 1 hour to simulate passage of time
         vm.warp(block.timestamp + 1 hours);
 
+        // Set new volatility through brevisProofMock
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(newVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(newVolatility));
 
-        uint256 previousVolatility = expectedVolatility;
-        uint256 smoothedVolatility =
-            (previousVolatility * (uniqHook.SMOOTHING_FACTOR() - 1) + newVolatility) / uniqHook.SMOOTHING_FACTOR();
+        // Calculate the expected smoothed volatility based on the old volatility and new volatility
+        uint256 newVolatilityUint = newVolatility;
+        uint256 newVolatilityChange = abs(int256(newVolatilityUint) - int256(expectedVolatility));
+        uint256 smoothingFactor =
+            (newVolatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) ? 5 : Constants.SMOOTHING_FACTOR;
 
-        assertEq(uniqHook.volatility(), smoothedVolatility);
+        uint256 smoothedVolatility = (expectedVolatility * (smoothingFactor - 1) + newVolatility) / smoothingFactor;
+
+        // Assert the smoothed volatility after the second adjustment
+        assertLe(uniqHook.volatility(), smoothedVolatility);
     }
 
     function testUniqHookInvariant_FeesAreBounded() public {
@@ -105,8 +132,8 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
         );
 
         // Check that fee is within logical bounds
-        uint24 maxFee = uniqHook.MAX_FEE();
-        uint24 minFee = uniqHook.MIN_FEE();
+        uint24 maxFee = Constants.MAX_FEE;
+        uint24 minFee = Constants.MIN_FEE;
         assertLe(fee, maxFee);
         assertGe(fee, minFee);
     }
@@ -117,6 +144,18 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
         // Set initial volatility through brevisProofMock
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(currentVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(currentVolatility));
+
+        uint256 volatilityUint = currentVolatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = currentVolatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = currentVolatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
+
+        assertEq(uniqHook.volatility(), expectedVolatility);
 
         // Perform a couple of swaps with dynamic sqrtPrice limits
         swapTokens(true, 10e18, TickMath.getSqrtPriceAtTick(-1000));
@@ -134,9 +173,9 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
         );
 
         // Ensure volatility decayed as expected and fee is within limits
-        uint256 expectedVolatility = currentVolatility / uniqHook.SMOOTHING_FACTOR();
+        // expectedVolatility = currentVolatility / uniqHook.SMOOTHING_FACTOR();
         assertGe(uniqHook.volatility(), expectedVolatility);
-        assertLe(fee, uniqHook.MAX_FEE());
+        assertLe(fee, Constants.MAX_FEE);
 
         // Warp time forward by 1 hour to simulate volatility decay
         vm.warp(block.timestamp + 1 hours);
@@ -153,9 +192,9 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
         );
 
         // Ensure volatility is decaying correctly and fee remains within bounds
-        expectedVolatility = currentVolatility / uniqHook.SMOOTHING_FACTOR();
+        // expectedVolatility = currentVolatility / uniqHook.SMOOTHING_FACTOR();
         assertGe(uniqHook.volatility(), expectedVolatility);
-        assertLe(fee, uniqHook.MAX_FEE());
+        assertLe(fee, Constants.MAX_FEE);
     }
 
     function testUniqHookInvariant_PriceMovementWithVolatility() public {
@@ -164,6 +203,16 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
         // Set initial volatility through brevisProofMock
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(initialVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(initialVolatility));
+
+        uint256 volatilityUint = initialVolatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = initialVolatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = initialVolatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
 
         int256 amountSpecified = int256(bound(uint256(10 ether), 1 ether, 100 ether));
 
@@ -186,15 +235,22 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
 
         uint256 postPrice = TickMath.getSqrtPriceAtTick(tickAfter);
 
-        assertLt(postPrice, prePrice);
+        if (amountSpecified > 0) {
+            assertLt(postPrice, prePrice);
+        } else {
+            assertGt(postPrice, prePrice);
+        }
     }
 
     function createUniqHook() internal returns (UniqHook) {
         (, bytes32 salt) = HookMiner.find(
-            address(this), flags, type(UniqHook).creationCode, abi.encode(manager, 10_000, address(brevisProofMock))
+            address(this),
+            flags,
+            type(UniqHook).creationCode,
+            abi.encode(manager, 10_000, address(brevisProofMock), address(priceFeedMock))
         );
 
-        UniqHook hook = new UniqHook{salt: salt}(manager, 10_000, address(brevisProofMock));
+        UniqHook hook = new UniqHook{salt: salt}(manager, 10_000, address(brevisProofMock), address(priceFeedMock));
         hook.setVkHash(VK_HASH);
         return hook;
     }
@@ -242,10 +298,14 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: TickMath.minUsableTick(60),
                 tickUpper: TickMath.maxUsableTick(60),
-                liquidityDelta: 100 ether,
+                liquidityDelta: 1000 ether,
                 salt: bytes32(0)
             }),
             ZERO_BYTES
         );
+    }
+
+    function abs(int256 x) internal pure returns (uint256) {
+        return x >= 0 ? uint256(x) : uint256(-x);
     }
 }

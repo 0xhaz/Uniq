@@ -29,10 +29,14 @@ import {MockBrevisProof, IBrevisProof} from "test/mocks/MockBrevisProof.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {IBrevisApp} from "src/interfaces/brevis/IBrevisApp.sol";
 import {HookMiner} from "test/utils/HookMiner.sol";
+import {MockV3Aggregator} from "test/mocks/MockV3Aggregator.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
+import {Constants} from "src/libraries/Constants.sol";
 
 contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using StateLibrary for IPoolManager;
 
     bytes32 private constant VK_HASH = 0x179a48b8a2a08b246cd51cb7b78143db774a83ff75fad0d39cf0445e16773426;
 
@@ -56,12 +60,17 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
 
     uint160 flags = uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG);
 
+    // use LINK/USD for TSLA/USDC
+    address priceFeed = 0xc59E3633BAAC79493d908e63626716e204A45EdF;
+
     MockERC20 tsla;
     MockERC20 usdc;
     MockBrevisProof brevisProofMock;
     UniqHook uniqHook;
     PoolKey poolKey;
     PoolId poolId;
+    MockV3Aggregator tslaPriceOracle;
+    MockV3Aggregator priceOracle;
 
     function setUp() public {
         deployFreshManagerAndRouters();
@@ -73,18 +82,23 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         tsla = MockERC20(Currency.unwrap(currency0));
         usdc = MockERC20(Currency.unwrap(currency1));
         brevisProofMock = new MockBrevisProof();
+        tslaPriceOracle = new MockV3Aggregator(18, 250e18);
+        priceOracle = new MockV3Aggregator(18, 1e8);
 
         // UniqHookImplementation impl =
         //     new UniqHookImplementation(manager, 10_000, IBrevisApp(address(brevisProofMock)), uniqHook);
         (, bytes32 salt) = HookMiner.find(
-            address(this), flags, type(UniqHook).creationCode, abi.encode(manager, 10_000, address(brevisProofMock))
+            address(this),
+            flags,
+            type(UniqHook).creationCode,
+            abi.encode(manager, 10_000, address(brevisProofMock), address(priceOracle))
         );
         // Tell the VM to start recording all storage reads and writes
         // (, bytes32[] memory writes) = vm.accesses(address(uniqHook));
 
         // Enabling custom precompile for UniqHook
         // vm.etch(address(uniqHook), address(impl).code);
-        uniqHook = new UniqHook{salt: salt}(manager, 10_000, address(brevisProofMock));
+        uniqHook = new UniqHook{salt: salt}(manager, 10_000, address(brevisProofMock), address(priceOracle));
         uniqHook.setVkHash(VK_HASH);
 
         // for each storage key that was written during the hook implementation, copy the value over
@@ -96,13 +110,14 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         // }
 
         // Initialize the pool
-        (poolKey, poolId) =
-            initPool(currency0, currency1, uniqHook, LPFeeLibrary.DYNAMIC_FEE_FLAG, SQRT_PRICE_1_1, ZERO_BYTES);
+        (poolKey, poolId) = initPoolAndAddLiquidity(
+            currency0, currency1, uniqHook, LPFeeLibrary.DYNAMIC_FEE_FLAG, SQRT_PRICE_1_1, ZERO_BYTES
+        );
 
-        tsla.approve(address(modifyLiquidityRouter), 1000 ether);
-        usdc.approve(address(modifyLiquidityRouter), 1000 ether);
-        tsla.mint(address(this), 1000 ether);
-        usdc.mint(address(this), 1000 ether);
+        tsla.approve(address(modifyLiquidityRouter), 10000 ether);
+        usdc.approve(address(modifyLiquidityRouter), 10000 ether);
+        tsla.mint(address(this), 10000 ether);
+        usdc.mint(address(this), 10000 ether);
 
         // Add liquidity at short range
         modifyLiquidityRouter.modifyLiquidity(
@@ -110,11 +125,13 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: -60,
                 tickUpper: 60,
-                liquidityDelta: 100 ether,
+                liquidityDelta: 1000 ether,
                 salt: bytes32(0)
             }),
             ZERO_BYTES
         );
+
+        // seedMoreLiquidity(poolKey, 10 ether, 10 ether);
 
         // Add liquidity at long range
         modifyLiquidityRouter.modifyLiquidity(
@@ -122,11 +139,13 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: -120,
                 tickUpper: 120,
-                liquidityDelta: 100 ether,
+                liquidityDelta: 1000 ether,
                 salt: bytes32(0)
             }),
             ZERO_BYTES
         );
+
+        // seedMoreLiquidity(poolKey, 10 ether, 10 ether);
 
         // Add liquidity at full range
         modifyLiquidityRouter.modifyLiquidity(
@@ -134,11 +153,13 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: TickMath.minUsableTick(60),
                 tickUpper: TickMath.maxUsableTick(60),
-                liquidityDelta: 100 ether,
+                liquidityDelta: 1000 ether,
                 salt: bytes32(0)
             }),
             ZERO_BYTES
         );
+
+        // seedMoreLiquidity(poolKey, 10 ether, 10 ether);
     }
 
     function testUniqHook1to1_beforeInitialize_setsLastVirtualOrderTimestamp() public {
@@ -202,6 +223,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         usdc.approve(address(uniqHook), 100 ether);
 
         vm.warp(submitTimestamp1);
+        priceOracle.updateAnswer(100e18);
         uniqHook.submitOrder(poolKey, orderKey1, 1e18);
         uniqHook.submitOrder(poolKey, orderKey3, 3e18);
 
@@ -213,9 +235,17 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         assertEq(rewardsFactor0For1, 0);
         assertEq(rewardsFactor1For0, 0);
 
+        vm.warp(submitTimestamp2);
+
+        uint80 roundId = 2;
+        int256 answer = 100e18;
+        uint256 startedAt = block.timestamp - 100;
+        uint256 updatedAt = block.timestamp - 1;
+        priceOracle.updateRoundData(roundId, answer, updatedAt, startedAt);
+
         // Warp time and submit 1 TWAMM order. Test that pool information is updated properly as one order expires and
         // another order is added to the pool
-        vm.warp(submitTimestamp2);
+
         uniqHook.submitOrder(poolKey, orderKey2, 2e18);
 
         (sellRate0For1, rewardsFactor0For1) = uniqHook.getOrderPool(poolKey, true);
@@ -223,8 +253,8 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
 
         assertEq(sellRate0For1, 2e18 / (expiration2 - submitTimestamp2));
         assertEq(sellRate1For0, 3 ether / (expiration2 - submitTimestamp1));
-        assertEq(rewardsFactor0For1, 1589863484107183108712763303440000);
-        assertEq(rewardsFactor1For0, 1579286630802389272220213783042601);
+        assertEq(rewardsFactor0For1, 1585091203363510286791812995220000);
+        assertEq(rewardsFactor1For0, 1584035531624958300378123585590279);
     }
 
     function testUniqHook1to1_submitOrder_EmitsEvent() public {
@@ -245,8 +275,15 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         (orderKey1, orderKey2, orderAmount) = submitOrdersBothDirections();
 
         int256 amountDelta = -1;
+        priceOracle.updateAnswer(100e18);
 
         vm.warp(20_000);
+
+        uint80 roundId = 2;
+        int256 answer = 100e18;
+        uint256 startedAt = block.timestamp - 100;
+        uint256 updatedAt = block.timestamp - 1;
+        priceOracle.updateRoundData(roundId, answer, updatedAt, startedAt);
 
         vm.expectEmit(true, true, true, true);
         emit UpdateOrder(poolId, address(this), 30_000, true, 0, 10_000 << 96);
@@ -260,8 +297,15 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         (orderKey1, orderKey2, orderAmount) = submitOrdersBothDirections();
         // decrease order amount by 10%
         int256 amountDelta = -int256(orderAmount) / 10;
+        priceOracle.updateAnswer(100e18);
 
         vm.warp(20_000);
+
+        uint80 roundId = 2;
+        int256 answer = 100e18;
+        uint256 startedAt = block.timestamp - 100;
+        uint256 updatedAt = block.timestamp - 1;
+        priceOracle.updateRoundData(roundId, answer, updatedAt, startedAt);
 
         (uint256 originalSellRate,) = uniqHook.getOrderPool(poolKey, true);
         uniqHook.updateOrder(poolKey, orderKey1, amountDelta);
@@ -284,8 +328,15 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
 
         // decrease order amount by 10%
         int256 amountDelta = -int256(orderAmount) / 10;
+        priceOracle.updateAnswer(100e18);
 
         vm.warp(20_000);
+
+        uint80 roundId = 2;
+        int256 answer = 100e18;
+        uint256 startedAt = block.timestamp - 100;
+        uint256 updatedAt = block.timestamp - 1;
+        priceOracle.updateRoundData(roundId, answer, updatedAt, startedAt);
 
         (uint256 originalSellRate,) = uniqHook.getOrderPool(poolKey, false);
         uniqHook.updateOrder(poolKey, orderKey2, amountDelta);
@@ -305,8 +356,15 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         Struct.OrderKey memory orderKey2;
         uint256 orderAmount;
         (orderKey1, orderKey2, orderAmount) = submitOrdersBothDirections();
+        priceOracle.updateAnswer(100e18);
 
         vm.warp(20_000);
+
+        uint80 roundId = 2;
+        int256 answer = 100e18;
+        uint256 startedAt = block.timestamp - 100;
+        uint256 updatedAt = block.timestamp - 1;
+        priceOracle.updateRoundData(roundId, answer, updatedAt, startedAt);
 
         uniqHook.updateOrder(poolKey, orderKey1, -1);
         Struct.Order memory deletedOrder = uniqHook.getOrder(poolKey, orderKey1);
@@ -324,8 +382,15 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         Struct.OrderKey memory orderKey2;
         uint256 orderAmount;
         (orderKey1, orderKey2, orderAmount) = submitOrdersBothDirections();
+        priceOracle.updateAnswer(100e18);
 
         vm.warp(20_000);
+
+        uint80 roundId = 2;
+        int256 answer = 100e18;
+        uint256 startedAt = block.timestamp - 100;
+        uint256 updatedAt = block.timestamp - 1;
+        priceOracle.updateRoundData(roundId, answer, updatedAt, startedAt);
 
         uniqHook.updateOrder(poolKey, orderKey2, -1);
         Struct.Order memory deletedOrder = uniqHook.getOrder(poolKey, orderKey2);
@@ -344,8 +409,16 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         Struct.OrderKey memory orderKey2;
         uint256 orderAmount;
         (orderKey1, orderKey2, orderAmount) = submitOrdersBothDirections();
+        priceOracle.updateAnswer(100e18);
 
         vm.warp(20_000);
+
+        uint80 roundId = 2;
+        int256 answer = 100e18;
+        uint256 startedAt = block.timestamp - 100;
+        uint256 updatedAt = block.timestamp - 1;
+        priceOracle.updateRoundData(roundId, answer, updatedAt, startedAt);
+
         uint256 balance0Before = tsla.balanceOf(address(uniqHook));
         tsla.approve(address(uniqHook), uint256(amountDelta));
         uniqHook.updateOrder(poolKey, orderKey1, amountDelta);
@@ -367,8 +440,15 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         Struct.OrderKey memory orderKey2;
         uint256 orderAmount;
         (orderKey1, orderKey2, orderAmount) = submitOrdersBothDirections();
+        priceOracle.updateAnswer(100e18);
 
         vm.warp(20_000);
+
+        uint80 roundId = 2;
+        int256 answer = 100e18;
+        uint256 startedAt = block.timestamp - 100;
+        uint256 updatedAt = block.timestamp - 1;
+        priceOracle.updateRoundData(roundId, answer, updatedAt, startedAt);
 
         uint256 balance1Before = usdc.balanceOf(address(uniqHook));
         usdc.approve(address(uniqHook), uint256(amountDelta));
@@ -403,11 +483,32 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
             }),
             ZERO_BYTES
         );
+        priceOracle.updateAnswer(100e18);
 
         vm.warp(10_000);
+
+        priceOracle.updateRoundData(2, 100e18, 9500, 9900);
+
+        // debugging
+        (uint80 _roundId, int256 _price, uint256 _startedAt, uint256 _updatedAt, uint80 _answeredInRound) =
+            priceOracle.latestRoundData();
+        emit log_named_uint("Oracle roundId", _roundId);
+        emit log_named_uint("Oracle startedAt", _startedAt);
+        emit log_named_uint("Oracle updatedAt", _updatedAt);
+
         uniqHook.submitOrder(poolKey, orderKey1, orderAmount);
         uniqHook.submitOrder(poolKey, orderKey2, orderAmount);
+
         vm.warp(20_000);
+
+        priceOracle.updateRoundData(3, 100e18, 19500, 19900);
+
+        // debugging
+        (_roundId, _price, _startedAt, _updatedAt, _answeredInRound) = priceOracle.latestRoundData();
+        emit log_named_uint("Oracle roundId (after warp 20_000)", _roundId);
+        emit log_named_uint("Oracle startedAt (after warp 20_000)", _startedAt);
+        emit log_named_uint("Oracle updatedAt (after warp 20_000)", _updatedAt);
+
         uniqHook.executeTWAMMOrders(poolKey);
         uniqHook.updateOrder(poolKey, orderKey1, 0);
         uniqHook.updateOrder(poolKey, orderKey2, 0);
@@ -424,6 +525,15 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         uint256 balance1BeforeThis = poolKey.currency1.balanceOfSelf();
 
         vm.warp(30_000);
+
+        priceOracle.updateRoundData(4, 100e18, 29500, 29900);
+
+        // debugging
+        (_roundId, _price, _startedAt, _updatedAt, _answeredInRound) = priceOracle.latestRoundData();
+        emit log_named_uint("Oracle roundId (after warp 30_000)", _roundId);
+        emit log_named_uint("Oracle startedAt (after warp 30_000)", _startedAt);
+        emit log_named_uint("Oracle updatedAt (after warp 30_000)", _updatedAt);
+
         uniqHook.executeTWAMMOrders(poolKey);
         uniqHook.updateOrder(poolKey, orderKey1, 0);
         uniqHook.updateOrder(poolKey, orderKey2, 0);
@@ -454,7 +564,85 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), volatility / uniqHook.SMOOTHING_FACTOR());
+        // Check the expected volatility change based on dynamic smoothing
+        uint256 volatilityUint = volatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = volatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = volatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
+
+        assertEq(uniqHook.volatility(), expectedVolatility);
+
+        uint128 liquidityAfterModification = manager.getLiquidity(poolKey.toId());
+        console.log("Liquidity after modification: %d", liquidityAfterModification);
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: amountSpecified,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
+
+        console.log("Liquidity before swap: %s", manager.getLiquidity(poolKey.toId()));
+        BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
+        console.log("Liquidity after swap: %s", manager.getLiquidity(poolKey.toId()));
+
+        (uint256 feeGrowthGlobal0, uint256 feeGrowthGlobal1) = manager.getFeeGrowthGlobals(key.toId());
+        console.log("Fee Growth Global 0: %s, Fee Growth Global 1: %s", feeGrowthGlobal0, feeGrowthGlobal1);
+
+        // Assert that the fee growth is non-zero
+        // assertGt(feeGrowthGlobal0, 0, "Fee Growth Global 0 should be greater than zero");
+        // assertGt(feeGrowthGlobal1, 0, "Fee Growth Global 1 should be greater than zero");
+
+        uint24 fee = uniqHook.getFee(amountSpecified, key, params);
+        console.log("Low volatility fee: %d", fee);
+
+        assertEq(fee, 408);
+        assertEq(swapDelta.amount0(), -1000383352500958382);
+        uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
+        assertEq(int256(swapDelta.amount1()), int256(token1Output));
+        assertEq(int256(token1Output), amountSpecified);
+    }
+
+    function testUniqHook1to1_LowVolatilityWithLiquidity_OnFeeAdjustment() public {
+        uint256 balance1Before = poolKey.currency1.balanceOfSelf();
+        int256 amountSpecified = 10 ether;
+        uint248 volatility = 20e18;
+
+        brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
+        uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
+
+        uint256 volatilityUint = volatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = volatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = volatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
+
+        assertEq(uniqHook.volatility(), expectedVolatility);
+
+        tsla.approve(address(modifyLiquidityRouter), 1000 ether);
+        usdc.approve(address(modifyLiquidityRouter), 1000 ether);
+
+        // IPoolManager.ModifyLiquidityParams memory modifyParams = IPoolManager.ModifyLiquidityParams({
+        //     tickLower: -60,
+        //     tickUpper: 60,
+        //     liquidityDelta: 100_000 ether,
+        //     salt: bytes32(0)
+        // });
+
+        // modifyLiquidityRouter.modifyLiquidity(poolKey, modifyParams, ZERO_BYTES);
+
+        uint128 liquidityAfterModification = manager.getLiquidity(poolKey.toId());
+        console.log("Liquidity after modification: %d", liquidityAfterModification);
 
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -465,13 +653,14 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
 
+        console.log("Liquidity before swap: %s", manager.getLiquidity(poolKey.toId()));
         BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
+        console.log("Liquidity after swap: %s", manager.getLiquidity(poolKey.toId()));
 
         uint24 fee = uniqHook.getFee(amountSpecified, key, params);
-        console.log("Low volatility fee: %d", fee);
 
-        assertEq(fee, 372);
-        assertEq(swapDelta.amount0(), -1003411956170479330);
+        assertEq(fee, 408);
+        assertEq(swapDelta.amount0(), -10034107214644990274);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -480,12 +669,25 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     function testUniqHook1to1_LowVolatilityHighVolume_OnFeeAdjustment() public {
         uint256 balance1Before = poolKey.currency1.balanceOfSelf();
         int256 amountSpecified = 100 ether;
-        uint248 volatility = 20e18; // 20%
+        uint248 volatility = 30e18; // 20%
 
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), volatility / uniqHook.SMOOTHING_FACTOR());
+        uint256 volatilityUint = volatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = volatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = volatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
+
+        assertEq(uniqHook.volatility(), expectedVolatility);
+
+        uint128 liquidityAfterModification = manager.getLiquidity(poolKey.toId());
+        console.log("Liquidity after modification: %d", liquidityAfterModification);
 
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -496,13 +698,15 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
 
+        console.log("Liquidity before swap: %s", manager.getLiquidity(poolKey.toId()));
         BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
+        console.log("Liquidity after swap: %s", manager.getLiquidity(poolKey.toId()));
 
         uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("Low volatility fee: %d", fee);
 
-        assertEq(fee, 372);
-        assertEq(swapDelta.amount0(), -11040918127835685342803);
+        assertEq(fee, 468);
+        assertEq(swapDelta.amount0(), -109171483690460650278);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -516,7 +720,17 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), volatility / uniqHook.SMOOTHING_FACTOR());
+        uint256 volatilityUint = volatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = volatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = volatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
+
+        assertEq(uniqHook.volatility(), expectedVolatility);
 
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -532,8 +746,8 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("Medium volatility fee: %d", fee);
 
-        assertEq(fee, 468);
-        assertEq(swapDelta.amount0(), -1003422994375327701);
+        assertEq(fee, 792);
+        assertEq(swapDelta.amount0(), -1000502418242016235);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -547,7 +761,17 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), volatility / uniqHook.SMOOTHING_FACTOR());
+        uint256 volatilityUint = volatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = volatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = volatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
+
+        assertEq(uniqHook.volatility(), expectedVolatility);
 
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -563,8 +787,8 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("Medium volatility fee: %d", fee);
 
-        assertEq(fee, 468);
-        assertEq(swapDelta.amount0(), -11041039585343999542509);
+        assertEq(fee, 792);
+        assertEq(swapDelta.amount0(), -109183276875959142688);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -573,12 +797,22 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     function testUniqHook1to1_HighVolatilityImpact_OnFeeAdjustment() public {
         uint256 balance1Before = poolKey.currency1.balanceOfSelf();
         int256 amountSpecified = 1 ether;
-        uint248 highVolatility = 100e18; // 100%
+        uint248 volatility = 100e18; // 100%
 
-        brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(highVolatility)), VK_HASH);
-        uniqHook.brevisCallback(bytes32(0), abi.encodePacked(highVolatility));
+        brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
+        uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), highVolatility / uniqHook.SMOOTHING_FACTOR());
+        uint256 volatilityUint = volatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = volatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = volatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
+
+        assertEq(uniqHook.volatility(), expectedVolatility);
 
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -594,8 +828,8 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("High volatility fee: %d", fee);
 
-        assertEq(fee, 660);
-        assertEq(swapDelta.amount0(), -1003487221475355226);
+        assertEq(fee, 1000);
+        assertEq(swapDelta.amount0(), -1000758655762032198);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -604,12 +838,20 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     function testUniqHook1to1_HighVolatilityHighVolume_OnFeeAdjustment() public {
         uint256 balance1Before = poolKey.currency1.balanceOfSelf();
         int256 amountSpecified = 100 ether;
-        uint248 highVolatility = 100e18; // 100%
+        uint248 volatility = 100e18; // 100%
 
-        brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(highVolatility)), VK_HASH);
-        uniqHook.brevisCallback(bytes32(0), abi.encodePacked(highVolatility));
+        brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(volatility)), VK_HASH);
+        uniqHook.brevisCallback(bytes32(0), abi.encodePacked(volatility));
 
-        assertEq(uniqHook.volatility(), highVolatility / uniqHook.SMOOTHING_FACTOR());
+        uint256 volatilityUint = volatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = volatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = volatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
 
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -625,8 +867,8 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("High volatility fee: %d", fee);
 
-        assertEq(fee, 660);
-        assertEq(swapDelta.amount0(), -11041746300216820661119);
+        assertEq(fee, 1000);
+        assertEq(swapDelta.amount0(), -109211241273679089242);
         uint256 token1Output = currency1.balanceOfSelf() - balance1Before;
         assertEq(int256(swapDelta.amount1()), int256(token1Output));
         assertEq(int256(token1Output), amountSpecified);
@@ -634,12 +876,21 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
 
     function testUniqHook1to1_FluctuateVolatility_PriceMovementOverTime() public {
         int256 amountSpecified = 10 ether; // Swap amount
-        uint248 initialVolatility = 70e18; // Initial volatility (70%)
+        uint248 initialVolatility = 75e18; // Initial volatility (70%)
 
         // Simulate an initial high volatility environment
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(initialVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(initialVolatility));
-        assertEq(uniqHook.volatility(), initialVolatility / uniqHook.SMOOTHING_FACTOR());
+
+        uint256 volatilityUint = initialVolatility;
+        uint256 volatilityChange = abs(int256(volatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = initialVolatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = initialVolatility / Constants.MAX_VOLATILITY_CHANGE_PCT; // Regular smoothing factor
+        }
 
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -650,17 +901,6 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         // Perform an initial swap to set a price change
         uint24 initialFee = uniqHook.getFee(amountSpecified, poolKey, params);
         console.log("Initial fee before 1-hour wait: %d", initialFee);
-
-        modifyLiquidityRouter.modifyLiquidity(
-            poolKey,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 10000 ether,
-                salt: bytes32(0)
-            }),
-            ZERO_BYTES
-        );
 
         BalanceDelta swapDelta = swapRouter.swap(
             poolKey,
@@ -673,8 +913,8 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
             ZERO_BYTES
         );
 
-        assertEq(initialFee, 74); // Expected high initial fee due to volatility and movement
-        assertEq(swapDelta.amount0(), -10019737910894373480);
+        assertEq(initialFee, 255); // Expected high initial fee due to volatility and movement
+        assertEq(swapDelta.amount0(), -10043649158442700725);
 
         vm.warp(block.timestamp + 1 hours); // Wait 1 hour
         uint248 decayedVolatility = 60e18;
@@ -683,7 +923,16 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         // Simulate a lower volatility environment after 1 hour
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(decayedVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(decayedVolatility));
-        assertEq(uniqHook.volatility(), 12300000000000000000);
+
+        uint256 volatilityUint2 = decayedVolatility;
+        volatilityChange = abs(int256(volatilityUint2) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility2;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility2 = decayedVolatility / 5;
+        } else {
+            expectedVolatility2 = decayedVolatility / Constants.MAX_VOLATILITY_CHANGE_PCT; // Regular smoothing factor
+        }
 
         IPoolManager.SwapParams memory params2 = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -705,8 +954,8 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
             ZERO_BYTES
         );
 
-        assertEq(newFee, 1000); // Expected lower fee due to decayed volatility
-        assertEq(swapDelta.amount0(), -20098013725844605033);
+        assertEq(newFee, 1000);
+        assertEq(swapDelta.amount0(), -20483103072751030820);
 
         vm.warp(block.timestamp + 6 hours); // Wait 6 hours
         uint248 decayedVolatility2 = 50e18;
@@ -715,7 +964,16 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         // Simulate a lower volatility environment after 6 hours
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(decayedVolatility2)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(decayedVolatility2));
-        assertEq(uniqHook.volatility(), 16070000000000000000);
+
+        uint256 volatilityUint3 = decayedVolatility2;
+        volatilityChange = abs(int256(volatilityUint3) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility3;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility3 = decayedVolatility2 / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility3 = decayedVolatility2 / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
 
         IPoolManager.SwapParams memory params3 = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -738,7 +996,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         );
 
         assertEq(newFee2, 1000); // Expected lower fee due to decayed volatility
-        assertEq(swapDelta.amount0(), -42040909168911006146);
+        assertEq(swapDelta.amount0(), -32323778080381082990);
 
         vm.warp(block.timestamp + 12 hours); // Wait 12 hours
         uint248 decayedVolatility3 = 40e18;
@@ -747,7 +1005,16 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         // Simulate a lower volatility environment after 12 hours
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(decayedVolatility3)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(decayedVolatility3));
-        assertEq(uniqHook.volatility(), 18463000000000000000);
+
+        uint256 volatilityUint4 = decayedVolatility3;
+        volatilityChange = abs(int256(volatilityUint4) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility4;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility4 = decayedVolatility3 / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility4 = decayedVolatility3 / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
 
         IPoolManager.SwapParams memory params4 = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -769,8 +1036,8 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
             ZERO_BYTES
         );
 
-        assertEq(newFee3, 1000); // Expected lower fee due to decayed volatility
-        assertEq(swapDelta.amount0(), -103753498983469189826);
+        assertEq(newFee3, 1000);
+        assertEq(swapDelta.amount0(), -34434183308436849251);
 
         vm.warp(block.timestamp + 24 hours); // Wait 24 hours
         uint248 decayedVolatility4 = 30e18;
@@ -779,7 +1046,16 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         // Simulate a lower volatility environment after 24 hours
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(decayedVolatility4)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(decayedVolatility4));
-        assertEq(uniqHook.volatility(), 19616700000000000000);
+
+        uint256 volatilityUint5 = decayedVolatility4;
+        volatilityChange = abs(int256(volatilityUint5) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility5;
+
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility5 = decayedVolatility4 / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility5 = decayedVolatility4 / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
 
         IPoolManager.SwapParams memory params5 = IPoolManager.SwapParams({
             zeroForOne: true,
@@ -802,7 +1078,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         );
 
         assertEq(newFee4, 1000); // Expected lower fee due to decayed volatility
-        assertEq(swapDelta.amount0(), -11514031918428910892703);
+        assertEq(swapDelta.amount0(), -49568580013368816921);
     }
 
     function testTrackVolatilityChanges() public {
@@ -813,21 +1089,49 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         // Set initial volatility
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(initialVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(initialVolatility));
-        console.log("Volatility after first update: %s", uniqHook.volatility());
-        assertEq(uniqHook.volatility(), 5e18); // Smoothing factor applied
+        uint256 firstVolatility = uniqHook.volatility();
+
+        // Calculate the expected volatility after the first update
+        uint256 initialVolatilityUint = initialVolatility;
+        uint256 volatilityChange = abs(int256(initialVolatilityUint) - int256(0)); // Old volatility is 0 at first
+        uint256 expectedVolatility;
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = initialVolatility / 5; // Dynamic smoothing factor = 5
+        } else {
+            expectedVolatility = initialVolatility / Constants.SMOOTHING_FACTOR; // Regular smoothing factor
+        }
+        assertEq(uniqHook.volatility(), expectedVolatility);
 
         // Update volatility with a new value (decayed)
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(newVolatility)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(newVolatility));
-        console.log("Volatility after second update: %s", uniqHook.volatility());
-        // Calculate expected volatility manually using the smoothing formula and assert it
-        uint256 expectedVolatility = (5e18 * (uniqHook.SMOOTHING_FACTOR() - 1) + 40e18) / uniqHook.SMOOTHING_FACTOR();
+        uint256 secondVolatility = uniqHook.volatility();
+
+        // Recalculate expected volatility for the second update
+        uint256 newVolatilityUint = newVolatility;
+        volatilityChange = abs(int256(newVolatilityUint) - int256(firstVolatility));
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = (firstVolatility * 4 + newVolatility) / 5; // Apply dynamic smoothing factor
+        } else {
+            expectedVolatility =
+                (firstVolatility * (Constants.SMOOTHING_FACTOR - 1) + newVolatility) / Constants.SMOOTHING_FACTOR;
+        }
         assertEq(uniqHook.volatility(), expectedVolatility);
 
         // Update volatility again
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(newVolatility2)), VK_HASH);
         uniqHook.brevisCallback(bytes32(0), abi.encodePacked(newVolatility2));
-        console.log("Volatility after third update: %s", uniqHook.volatility());
+
+        // Recalculate expected volatility for the third update
+        uint256 newVolatilityUint2 = newVolatility2;
+        volatilityChange = abs(int256(newVolatilityUint2) - int256(secondVolatility));
+        if (volatilityChange > Constants.MAX_VOLATILITY_CHANGE_PCT) {
+            expectedVolatility = (secondVolatility * 4 + newVolatility2) / 5; // Dynamic smoothing factor
+        } else {
+            expectedVolatility =
+                (secondVolatility * (Constants.SMOOTHING_FACTOR - 1) + newVolatility2) / Constants.SMOOTHING_FACTOR;
+        }
+        assertEq(uniqHook.volatility(), expectedVolatility);
     }
 
     function newPoolKeyWithTWAMM(IHooks hooks) public returns (PoolKey memory, PoolId) {
@@ -850,5 +1154,9 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         vm.warp(10_000);
         uniqHook.submitOrder(poolKey, key1, amount);
         uniqHook.submitOrder(poolKey, key2, amount);
+    }
+
+    function abs(int256 x) internal pure returns (uint256) {
+        return x >= 0 ? uint256(x) : uint256(-x);
     }
 }

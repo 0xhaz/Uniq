@@ -16,6 +16,12 @@ library Errors {
     /// @notice Thrown when trying to submit an order without initializing TWAMM state first
     error NotInitialized();
 
+    /// @notice Thrown when trying to submit an order with a price deviation that is too high
+    error PriceDeviation();
+
+    /// @notice Thrown when trying to submit an order with a price deviation that is too high
+    error Oracle__SignificantPriceDeviation(uint internalPrice, uint externalPrice, uint priceDeviation);
+
     /// @notice Thrown when trying to submit an order with an expiration that isn't on the interval
     /// @param expiration The expiration timestamp of the order
     error ExpirationNotOnInterval(uint256 expiration);

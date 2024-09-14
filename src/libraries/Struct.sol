@@ -73,6 +73,8 @@ library Struct {
         OrderPool orderPool0For1;
         OrderPool orderPool1For0;
         mapping(bytes32 => Order) orders;
+        Observation[65535] observations;
+        ObservationState observationState;
     }
 
     struct Observation {
