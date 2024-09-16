@@ -9,11 +9,9 @@ import {FixedPoint96} from "v4-core/libraries/FixedPoint96.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {SafeCast} from "v4-core/libraries/SafeCast.sol";
 import {IERC20Minimal} from "v4-core/interfaces/external/IERC20Minimal.sol";
-import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {TransferHelper} from "src/libraries/TransferHelper.sol";
 import {IUniqHook} from "src/interfaces/IUniqHook.sol";
 import {TwammMath} from "src/libraries/TWAMMMath.sol";
-import {OrderPool} from "src/libraries/OrderPool.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {PoolGetters} from "src/libraries/PoolGetters.sol";
@@ -39,8 +37,6 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
     using PoolIdLibrary for PoolKey;
-    using TickMath for int24;
-    using TickMath for uint160;
     using SafeCast for uint256;
     using PoolGetters for IPoolManager;
     using TickBitmap for mapping(int16 => uint256);
@@ -136,7 +132,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         // calculate dynamic fee based on volatility
         uint256 priceMovement = DynamicFees.calculateMovement(key, poolManager, volatility, lastPrices, lastTimestamp);
 
-        uint24 dynamicFee = adjustFee(DynamicFees.abs(params.amountSpecified), priceMovement, key, params);
+        uint24 dynamicFee = _adjustFee(DynamicFees.abs(params.amountSpecified), priceMovement, key, params);
 
         /// @notice Updates the pools lp fees for the a pool that has enabled dynamic lp fees.
         poolManager.updateDynamicLPFee(key, dynamicFee);
@@ -293,17 +289,30 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
             return lastFee[key.toId()];
         }
 
-        return adjustFee(DynamicFees.abs(amount), priceMovement, key, params);
+        return _adjustFee(DynamicFees.abs(amount), priceMovement, key, params);
     }
 
     /*/////////////////////////////////////////////////////////////////////
                             Internal Functions                          
     /////////////////////////////////////////////////////////////////////*/
 
+    /**
+     * @notice Retrieves the state of long-term orders for a given pool key.
+     * @dev Converts the PoolKey into a PoolId and fetches the associated order state.
+     * @param key The PoolKey that uniquely identifies the pool.
+     * @return The order state for the given pool.
+     */
     function _getTWAMM(PoolKey memory key) internal view returns (Struct.OrderState storage) {
         return orderStates[PoolId.wrap(keccak256(abi.encode(key)))];
     }
 
+    /**
+     * @notice Callback function that is triggered to unlock swap functionality.
+     * @dev Decodes the raw data to retrieve the pool key and swap parameters, then executes a swap.
+     *      Manages balance deltas and ensures tokens are settled correctly.
+     * @param rawData Encoded data containing the PoolKey and SwapParams needed to execute the swap.
+     * @return An empty byte array after successful execution.
+     */
     function _unlockCallback(bytes calldata rawData) internal override returns (bytes memory) {
         (PoolKey memory key, IPoolManager.SwapParams memory swapParams) =
             abi.decode(rawData, (PoolKey, IPoolManager.SwapParams));
@@ -328,7 +337,13 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         return bytes("");
     }
 
-    function brevisCommission(PoolKey calldata key, IPoolManager.SwapParams calldata swapParams) internal {
+    /**
+     * @notice Charges a commission on the swap by taking a percentage of the token amount.
+     * @dev Determines the inbound token from the pool and transfers a portion to the contract.
+     * @param key The PoolKey that identifies the pool.
+     * @param swapParams Parameters of the swap such as token direction and amount.
+     */
+    function _brevisCommission(PoolKey calldata key, IPoolManager.SwapParams calldata swapParams) internal {
         uint256 tokenAmount =
             swapParams.amountSpecified < 0 ? uint256(-swapParams.amountSpecified) : uint256(swapParams.amountSpecified);
 
@@ -342,8 +357,16 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         poolManager.take(inboundToken, address(this), fee);
     }
 
-    // adjust the volatility fee based on the volume of the swap
-    function adjustFee(
+    /**
+     * @notice Adjusts the fee dynamically based on trade volume, liquidity, and price movement.
+     * @dev The fee is adjusted by calculating liquidity-adjusted and volatility-based values, then clamped to a defined range.
+     * @param volume The trade volume used for calculating the fee.
+     * @param priceMovement The percentage price change since the last trade.
+     * @param key The PoolKey for identifying the liquidity pool.
+     * @param params The swap parameters containing the direction and amount of the swap.
+     * @return The dynamically adjusted fee.
+     */
+    function _adjustFee(
         uint256 volume,
         uint256 priceMovement,
         PoolKey calldata key,
@@ -369,7 +392,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         // Volume factor and liquidity-based adjustment using new function
         uint24 liquidityAdjustedFee =
             DynamicFees.adjustFeeBasedOnLiquidity(volume, currentSqrtPrice, currentTick, liquidity, key.tickSpacing);
-       
+
         uint256 dynamicFee = lastFee_ + volatilityFee + liquidityAdjustedFee;
 
         // directional multiplier at conservative trades
@@ -396,6 +419,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         return uint24(dynamicFee);
     }
 
+    // KIV: To be implemented after the oracle is integrated
     function updateObservation(PoolKey calldata key, int24 tick, uint128 liquidity) internal {
         Struct.OrderState storage state = orderStates[key.toId()];
         Struct.Observation[65535] storage obs = orderStates[key.toId()].observations;
@@ -436,6 +460,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         }
     }
 
+    // KIV: To be implemented after the oracle is integrated
     function initializeOrderState(PoolId poolId) internal {
         Struct.OrderState storage state = orderStates[poolId];
 
@@ -445,14 +470,26 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
     /*/////////////////////////////////////////////////////////////////////
                            Brevis Override Functions                   
     /////////////////////////////////////////////////////////////////////*/
+    /**
+     * @notice Processes the result from a Brevis proof and adjusts volatility accordingly.
+     * @dev The proof verifies key performance data such as volatility, and the contract uses this to update its internal volatility value.
+     * @param vkHash_ The hash of the verification key for the proof.
+     * @param circuitOutput_ The output from the circuit after proof validation.
+     */
     function handleProofResult(bytes32, bytes32 vkHash_, bytes calldata circuitOutput_) internal override {
         if (vkHash != vkHash_) revert Errors.InvalidVkHash();
 
         uint256 newVolatility = decodeOutput(circuitOutput_);
         console.log("Decoded volatility: %s", newVolatility);
-        adjustVolatility(newVolatility);
+        _adjustVolatility(newVolatility);
     }
 
+    /**
+     * @notice Decodes the output of the Brevis proof to retrieve the volatility value.
+     * @dev The Brevis proof encodes the volatility as a 248-bit integer within the first 31 bytes of the circuit output.
+     * @param output The output of the Brevis proof as bytes.
+     * @return The decoded volatility value as a uint256.
+     */
     function decodeOutput(bytes calldata output) internal pure returns (uint256) {
         uint248 vol = uint248(bytes31(output[0:31])); // vol is output as uint248 (31 bytes)
 
@@ -467,7 +504,12 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
                             Private Functions                          
     /////////////////////////////////////////////////////////////////////*/
 
-    function adjustVolatility(uint256 newVolatility) private {
+    /**
+     * @notice Adjusts the internal volatility value based on new data.
+     * @dev Uses a decay factor to gradually smooth volatility changes over time and updates the volatility history.
+     * @param newVolatility The new volatility value to adjust the internal volatility towards.
+     */
+    function _adjustVolatility(uint256 newVolatility) private {
         uint256 timeElapsed = block.timestamp - lastUpdateTime;
         uint256 decayFactor = DynamicFees.calculateTimeDecayFactor(timeElapsed);
 

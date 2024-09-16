@@ -5,6 +5,7 @@ import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
 import {FixedPoint96} from "v4-core/libraries/FixedPoint96.sol";
 import {FullMath} from "v4-core/libraries/FullMath.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
+import {console} from "forge-std/Console.sol";
 
 /// @title Volatility library
 /// @notice Provides functions that use Uniswap V4 to compute price volatility
@@ -148,6 +149,7 @@ library Volatility {
         (uint256 value0, uint256 value1) = _getValuesOfLiquidity(
             sqrtPriceX96, TickMath.getSqrtPriceAtTick(tick), TickMath.getSqrtPriceAtTick(tick + tickSpacing), liquidity
         );
+
         tickTVL = (value0 + value1) << 64;
     }
 
@@ -167,13 +169,21 @@ library Volatility {
         uint160 sqrtRatioBX96,
         uint128 liquidity
     ) private pure returns (uint256 value0, uint256 value1) {
+        console.log("sqrtRatioX96: %d", sqrtRatioX96);
+        console.log("sqrtRatioAX96: %d", sqrtRatioAX96);
+        console.log("sqrtRatioBX96: %d", sqrtRatioBX96);
+        console.log("Liquidity: %d", liquidity);
         assert(sqrtRatioAX96 <= sqrtRatioX96 && sqrtRatioX96 <= sqrtRatioBX96);
+        console.log("Passed assert");
 
         unchecked {
             uint224 numerator = uint224(FullMath.mulDiv(sqrtRatioX96, sqrtRatioBX96 - sqrtRatioX96, FixedPoint96.Q96));
+            console.log("Numerator: %d", numerator);
 
             value0 = FullMath.mulDiv(liquidity, numerator, sqrtRatioBX96);
             value1 = FullMath.mulDiv(liquidity, sqrtRatioX96 - sqrtRatioAX96, FixedPoint96.Q96);
+            console.log("Value0: %d", value0);
+            console.log("Value1: %d", value1);
         }
     }
 

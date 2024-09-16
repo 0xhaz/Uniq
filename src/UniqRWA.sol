@@ -44,6 +44,20 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
     // Mapping of requestId to RWARequest
     mapping(bytes32 requestId => RWARequest) private requestIdToRequest;
 
+    /**
+     * @notice Contract constructor initializes various external dependencies and sets the initial state.
+     * @param subId_ The subscription ID for Chainlink Functions.
+     * @param assetName_ The name of the RWA asset.
+     * @param mintSource_ The JavaScript code for minting tokens.
+     * @param redeemSource_ The JavaScript code for redeeming tokens.
+     * @param functionsRouter_ The address of the Chainlink Functions router.
+     * @param donID_ The DON ID for Chainlink Functions.
+     * @param rwaPriceFeed_ The price feed for the RWA asset.
+     * @param usdcPriceFeed_ The price feed for USDC.
+     * @param redemptionToken_ The address of the token used for redemption.
+     * @param secretVersion_ The version of the secret used for Chainlink Functions.
+     * @param secretSlot_ The slot number for the secret.
+     */
     constructor(
         uint64 subId_,
         bytes32 assetName_,
@@ -74,6 +88,12 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
         assetPriceFeed[assetName_] = rwaPriceFeed_;
     }
 
+    /**
+     * @notice Adds a new asset to the contract with a corresponding price feed.
+     * @dev Only the contract owner can add a new asset. Reverts if asset or price feed is zero address.
+     * @param asset The asset's unique identifier.
+     * @param priceFeed The address of the price feed for the asset.
+     */
     function addAsset(bytes32 asset, address priceFeed) external onlyOwner {
         if (priceFeed == address(0) || asset == bytes32(0)) {
             revert UniqRWA__AssetNotFound();
@@ -85,6 +105,13 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
         emit AssetAdded(asset, priceFeed);
     }
 
+    /**
+     * @notice Sends a mint request to the Chainlink Functions API to mint RWA tokens.
+     * @dev Only the owner can call this function. The request is paused if the contract is paused.
+     * @param asset The asset to be minted.
+     * @param amountTokensToMint The amount of tokens to mint.
+     * @return requestId The unique request ID for tracking the mint request.
+     */
     function sendMintRequest(bytes32 asset, uint256 amountTokensToMint)
         external
         onlyOwner
@@ -113,9 +140,11 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
     }
 
     /**
-     * @notice Sends an HTTP request for character information
-     * @dev If you pass 0, that will act as a way to get an updated portfolio balance
-     * @return requestId The ID of the request
+     * @notice Sends a redeem request to the Chainlink Functions API to redeem RWA tokens for USDC.
+     * @dev Pauses the function when the contract is paused. Burns the tokens to be redeemed.
+     * @param asset The asset being redeemed.
+     * @param amountBRToken The amount of tokens being redeemed.
+     * @return requestId The unique request ID for tracking the redeem request.
      */
     function sendRedeemRequest(bytes32 asset, uint256 amountBRToken)
         external
@@ -145,14 +174,26 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
         _burn(msg.sender, amountBRToken);
     }
 
+    /**
+     * @notice Sets the secret version used by Chainlink Functions.
+     * @param _secretVersion The new secret version.
+     */
     function setSecretVersion(uint64 _secretVersion) external override {
         secretVersion = _secretVersion;
     }
 
+    /**
+     * @notice Sets the secret slot used by Chainlink Functions.
+     * @param _secretSlot The new secret slot.
+     */
     function setSecretSlot(uint8 _secretSlot) external override {
         secretSlot = _secretSlot;
     }
 
+    /**
+     * @notice Allows users to withdraw their USDC after a successful redeem request.
+     * @param asset The asset being withdrawn.
+     */
     function withdraw(bytes32 asset) external override whenNotPaused {
         uint256 amountToWithdraw = positions[asset].userToWithdrawAmount[msg.sender];
         positions[asset].userToWithdrawAmount[msg.sender] = 0;
@@ -163,10 +204,18 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
         }
     }
 
+    /**
+     * @notice Pauses the contract, halting certain actions.
+     * @dev Only the owner can pause the contract.
+     */
     function pause() external override onlyOwner {
         _pause();
     }
 
+    /**
+     * @notice Unpauses the contract, resuming normal functionality.
+     * @dev Only the owner can unpause the contract.
+     */
     function unpause() external override onlyOwner {
         _unpause();
     }
@@ -217,6 +266,13 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
         }
     }
 
+    /**
+     * @notice Mints tokens for a given request once the Chainlink response is fulfilled.
+     * @dev Verifies that the portfolio has enough collateral to mint the requested amount of tokens.
+     *      Mints the tokens to the requester if the conditions are met.
+     * @param requestId The unique ID of the fulfilled mint request.
+     * @param newPortfolioBalance The updated portfolio balance after the Chainlink response.
+     */
     function _mintFulFillRequest(bytes32 requestId, uint256 newPortfolioBalance) internal {
         // bytes32 asset = requestIdToRequestAsset[requestId].asset;
 
@@ -265,6 +321,11 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
                             VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
+    /**
+     * @notice Retrieves the current price of an asset using its price feed.
+     * @param assetAddress The asset identifier (bytes32) to get the price of.
+     * @return The current price of the asset, scaled by the feed's precision.
+     */
     function getAssetPrice(bytes32 assetAddress) public view returns (uint256) {
         address assetPriceFeed_ = assetPriceFeed[assetAddress];
 
@@ -274,6 +335,12 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
         return uint256(price) * Constants.ADDITIONAL_FEED_PRECISION;
     }
 
+    /**
+     * @notice Calculates the total value of the portfolio after adding a specified number of assets.
+     * @param asset The asset identifier (bytes32) to calculate the total value for.
+     * @param addedNumberOfAsset The number of additional assets to be included in the calculation.
+     * @return The calculated total value of the portfolio.
+     */
     function getCalculatedNewTotalValue(bytes32 asset, uint256 addedNumberOfAsset)
         public
         view
@@ -283,6 +350,11 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
         return ((totalSupply() + addedNumberOfAsset) * getAssetPrice(asset)) / Constants.PRECISION;
     }
 
+    /**
+     * @notice Retrieves data about all assets in the portfolio, including their asset identifiers and price feeds.
+     * @return asset An array of asset identifiers (bytes32).
+     * @return priceFeed An array of price feed addresses corresponding to each asset.
+     */
     function getAssetsData() public view returns (bytes32[] memory, address[] memory) {
         uint256 len = assets.length;
         bytes32[] memory asset = new bytes32[](len);
@@ -299,10 +371,19 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
         return (asset, priceFeed);
     }
 
+    /**
+     * @notice Retrieves the current portfolio balance of a specified asset.
+     * @param asset The asset identifier (bytes32) for which to retrieve the balance.
+     * @return The current portfolio balance for the specified asset.
+     */
     function getPortfolioBalance(bytes32 asset) public view returns (uint256) {
         return positions[asset].portfolioBalance;
     }
 
+    /**
+     * @notice Retrieves the current price of USDC using its price feed.
+     * @return The current USDC price, scaled by the feed's precision.
+     */
     function getUsdcPrice() public view override returns (uint256) {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(usdcPriceFeed);
 
@@ -310,20 +391,42 @@ contract UniqRWA is FunctionsClient, ConfirmedOwner, IUniqRWA, ERC20, Pausable {
         return uint256(price) * Constants.ADDITIONAL_FEED_PRECISION;
     }
 
+    /**
+     * @notice Calculates the USD value of a specified amount of RWA tokens.
+     * @param asset The asset identifier (bytes32) for which to calculate the value.
+     * @param rwaAmount The amount of RWA tokens to calculate the value for.
+     * @return The USD value of the specified amount of RWA tokens.
+     */
     function getUsdValueOfAsset(bytes32 asset, uint256 rwaAmount) public view returns (uint256) {
         return (rwaAmount * getAssetPrice(asset)) / Constants.PRECISION;
     }
 
+    /**
+     * @notice Converts a USD value into its equivalent value in USDC.
+     * @param usdcValue The USD value to convert.
+     * @return The equivalent value in USDC.
+     */
     function getUsdcValueofUsd(uint256 usdcValue) public view returns (uint256) {
         return (usdcValue * Constants.PRECISION) / getUsdcPrice();
     }
 
     // function getTotalUsdValue(bytes32 asset) external view returns (uint256) {}
 
+    /**
+     * @notice Retrieves the details of a specific request by its ID.
+     * @param requestId The unique identifier of the request.
+     * @return The RWARequest struct containing details of the request.
+     */
     function getRequest(bytes32 requestId) external view override returns (RWARequest memory) {
         return requestIdToRequest[requestId];
     }
 
+    /**
+     * @notice Retrieves the amount of USDC available for a user to withdraw after a redeem request.
+     * @param asset The asset identifier (bytes32) for which to check the withdrawal amount.
+     * @param user The address of the user making the withdrawal.
+     * @return The amount of USDC the user is eligible to withdraw.
+     */
     function getWithdrawalAmount(bytes32 asset, address user) external view override returns (uint256) {
         return positions[asset].userToWithdrawAmount[user];
     }

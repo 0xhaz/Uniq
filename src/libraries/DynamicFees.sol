@@ -21,6 +21,17 @@ library DynamicFees {
     using TickMath for int24;
     using TickMath for uint160;
 
+    /**
+     * @notice Calculates the price movement between the current and last price of a given pool.
+     * @dev Uses the time decay factor to adjust the price movement and ensures that the first calculation
+     *      after deployment returns a default value if no prior prices are available.
+     * @param key The PoolKey that uniquely identifies the pool.
+     * @param poolManager The pool manager contract that provides pool data such as prices and liquidity.
+     * @param volatility The current volatility value.
+     * @param lastPrices A mapping of the last prices for each pool ID.
+     * @param lastTimestamp A mapping of the last timestamp for each pool ID.
+     * @return priceMovement The percentage price change since the last update, adjusted for time decay.
+     */
     function calculateMovement(
         PoolKey calldata key,
         IPoolManager poolManager,
@@ -67,17 +78,25 @@ library DynamicFees {
         return priceMovement;
     }
 
+    /**
+     * @notice Adjusts the trading fee based on the liquidity available in the pool and the trade volume.
+     * @dev The fee is scaled by comparing the trade volume to the liquidity in the pool and applying a linear adjustment.
+     * @param volume The trade volume for the current swap.
+     * @param sqrtPriceX96 The current square root of the price.
+     * @param tick The current tick value for the pool.
+     * @param liquidity The available liquidity in the pool.
+     * @param tickSpacing The tick spacing for the pool.
+     * @return liquidityAdjustedFee The adjusted fee based on the volume-to-liquidity ratio.
+     */
     function adjustFeeBasedOnLiquidity(
-        /*PoolKey calldata key*/
         uint256 volume,
         uint160 sqrtPriceX96,
         int24 tick,
         uint128 liquidity,
         int24 tickSpacing
     ) internal pure returns (uint24) {
-        // PoolId poolId = key.toId();
-
         if (liquidity == 0) {
+            console.log("Liquidity is zero, returning MAX_FEE");
             return Constants.MAX_FEE;
         }
 
@@ -86,13 +105,9 @@ library DynamicFees {
 
         // console.log("Gross Liquidity in AdjustFeeBasedOnLiquidity: %s", liquidityGross);
         // console.log("Net Liquidity in AdjustFeeBasedOnLiquidity: %s", liquidityNet);
-        console.log("Tick in  AdjustFeeBasedOnLiquidity: %s", tick);
 
         // Compute the TVL at the current tick
         uint256 tickTVL = Volatility.computeTickTVLX64(tickSpacing, tick, sqrtPriceX96, liquidity);
-        // console.log("Tick Spacing in AdjustFeeBasedOnLiquidity: %s", tickSpacing);
-        // console.log("Sqrt Price in AdjustFeeBasedOnLiquidity: %s", sqrtPriceX96);
-        // console.log("Liquidity in AdjustFeeBasedOnLiquidity: %s", liquidity);
         console.log("Tick TVL in AdjustFeeBasedOnLiquidity: %s", tickTVL);
 
         require(tickTVL > 0, "tickTVL cannot be zero");
@@ -109,8 +124,8 @@ library DynamicFees {
         // }
 
         // volume-to-liquidity ratio to determine fee adjustment
-        uint256 volumeToLiquidityRatio = Math.mulDiv(volume, 1e36, tickTVL); // safe division
         console.log("Volume * 1e18: %s", volume * 1e18); // Before division
+        uint256 volumeToLiquidityRatio = Math.mulDiv(volume, 1e36, tickTVL); // safe division
         console.log("Volume-to-Liquidity Ratio: %s", volumeToLiquidityRatio);
         require(volumeToLiquidityRatio < type(uint256).max, "Overflow in volumeToLiquidityRatio");
 
@@ -127,11 +142,27 @@ library DynamicFees {
         }
     }
 
+    /**
+     * @notice Calculates the fee adjustment based on volatility and price movement.
+     * @dev A multiplier is applied to the volatility value, scaled by the price movement, to determine the volatility fee.
+     * @param priceMovement The percentage change in price.
+     * @param volatility The current volatility value.
+     * @return The volatility fee as an adjustment to the base fee.
+     */
     function calculateVolatilityFee(uint256 priceMovement, uint256 volatility) internal pure returns (uint256) {
         uint256 movementFactor = priceMovement > 0 ? priceMovement : 1e16;
         return (volatility * Constants.VOLATILITY_MULTIPLIER * movementFactor) / Constants.VOLATILITY_FACTOR;
     }
 
+    /**
+     * @notice Calculates a directional multiplier to adjust fees based on trade aggression.
+     * @dev The multiplier increases for aggressive trades where price movement is high and volume is large relative to liquidity.
+     * @param isAggressive Whether the trade is considered aggressive based on direction and price movement.
+     * @param priceMovement The percentage change in price.
+     * @param volume The trade volume.
+     * @param liquidity The available liquidity in the pool.
+     * @return The directional multiplier used to adjust the fee.
+     */
     function calculateDirectionalMultiplier(bool isAggressive, uint256 priceMovement, uint256 volume, uint128 liquidity)
         internal
         pure
@@ -144,12 +175,15 @@ library DynamicFees {
             // Scale multiplier based on price movement (larger movement = larger fee multiplier)
             if (priceMovement > 1e18) {
                 baseMultiplier = 2; // slightly aggressive
+                console.log("Price Movement > 1e18");
             }
             if (priceMovement > 5e18) {
                 baseMultiplier = 3; // moderately aggressive
+                console.log("Price Movement > 5e18");
             }
             if (priceMovement > 10e18) {
                 baseMultiplier = 4; // highly aggressive
+                console.log("Price Movement > 10e18");
             }
 
             if (liquidity > 0) {
@@ -157,27 +191,33 @@ library DynamicFees {
                 uint256 volumeToLiquidityRatio = Math.mulDiv(volume, 1e18, liquidity); // safe division
                 if (volumeToLiquidityRatio > 5e17) {
                     baseMultiplier += 1; // if trade size is greater than 50% of liquidity, increase multiplier
+                    console.log("Volume to Liquidity Ratio > 5e17");
                 }
                 if (volumeToLiquidityRatio > 1e18) {
                     baseMultiplier += 2; // if trade size is greater than liquidity, increase multiplier
+                    console.log("Volume to Liquidity Ratio > 1e18");
                 }
             } else {
                 baseMultiplier += 2; // if no liquidity, increase multiplier
+                console.log("No Liquidity");
             }
         }
-
+        console.log("Directional Multiplier: %s", baseMultiplier);
         return baseMultiplier;
     }
 
-    function calculateInternalPrice(uint160 sqrtPriceX96) private pure returns (uint256) {
-        return (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) / FixedPoint96.Q96;
-    }
-
+    /**
+     * @notice Converts a tick value to an internal price.
+     * @dev This uses the square root of the price formula to derive the price from the tick.
+     * @param tick The tick value representing the current price point in the Uniswap pool.
+     * @return The internal price as a uint256.
+     */
     function calculateInternalPriceFromTick(int24 tick) internal pure returns (uint256) {
         uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(tick);
         return (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) / FixedPoint96.Q96;
     }
 
+    // KIV: This function will be use after the integration of the oracle
     function calculatePriceMovement(uint256 internalPrice, uint256 oraclePrice) private pure returns (uint256) {
         if (internalPrice > oraclePrice) {
             return ((internalPrice - oraclePrice) * 1e18) / oraclePrice;
@@ -186,6 +226,7 @@ library DynamicFees {
         }
     }
 
+    // KIV: This function will be use after the integration of the oracle
     function calculatePriceDeviation(uint256 internalPrice, uint256 externalPrice) private pure returns (uint256) {
         if (internalPrice > externalPrice) {
             return ((internalPrice - externalPrice) * 1e18) / externalPrice;
@@ -194,6 +235,12 @@ library DynamicFees {
         }
     }
 
+    /**
+     * @notice Calculates the time decay factor to adjust price movements based on the time elapsed since the last trade.
+     * @dev Decays the price movement over time, with a 1% decay per day, applied per second.
+     * @param timeElapsed The amount of time (in seconds) since the last trade.
+     * @return decayFactor The decay factor to apply to price movements.
+     */
     function calculateTimeDecayFactor(uint256 timeElapsed) internal pure returns (uint256 decayFactor) {
         // Decay by 1% per day (1e18 / 1 days)
         // (1 - 1% daily decay) ^ (1/86400)
@@ -208,10 +255,12 @@ library DynamicFees {
         }
     }
 
+    // KIV: This function will be use after the integration of the oracle
     function getPriceTolerance() internal pure returns (uint256) {
         return 1e16; // 1%
     }
 
+    // KIV: This function will be use after the integration of the oracle
     function decayVolatilityImpact(uint256 volatility, uint256 lastOracleUpdate) private view {
         uint256 timeElapsed = block.timestamp - lastOracleUpdate;
         if (timeElapsed > 1 hours) {
@@ -232,10 +281,23 @@ library DynamicFees {
     //     }
     // }
 
+    /**
+     * @notice Returns the absolute value of a signed integer.
+     * @dev Converts a negative signed integer into its positive counterpart.
+     * @param x The signed integer input.
+     * @return The absolute value of the input as an unsigned integer.
+     */
     function abs(int256 x) internal pure returns (uint256) {
         return x >= 0 ? uint256(x) : uint256(-x);
     }
 
+    /**
+     * @notice Computes the square root of a given number.
+     * @dev Uses an optimized algorithm to calculate the square root of the input number.
+     *      The result is truncated towards zero, meaning that it rounds down for non-perfect squares.
+     * @param x The number for which to compute the square root.
+     * @return y The truncated square root of the input number.
+     */
     function sqrt(uint256 x) internal pure returns (uint256 y) {
         assembly {
             // Compute square root of `x` using optimized assembly

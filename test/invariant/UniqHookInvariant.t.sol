@@ -34,13 +34,20 @@ import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {PoolGetters} from "src/libraries/PoolGetters.sol";
 import {MockV3Aggregator} from "test/mocks/MockV3Aggregator.sol";
 import {DynamicFees} from "src/libraries/DynamicFees.sol";
+import {DynamicFees} from "src/libraries/DynamicFees.sol";
+import {FixedPoint96} from "v4-core/libraries/FixedPoint96.sol";
 import {Constants} from "src/libraries/Constants.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Volatility} from "src/libraries/Volatility.sol";
 
 contract UniqHookInvariant is StdInvariant, Test, Deployers {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using PoolGetters for IPoolManager;
+
+    mapping(PoolId => uint256) public lastPrices;
+    mapping(PoolId => uint256) lastTimestamp;
 
     bytes32 private constant VK_HASH = 0x179a48b8a2a08b246cd51cb7b78143db774a83ff75fad0d39cf0445e16773426;
 
@@ -100,7 +107,7 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
         assertLe(uniqHook.volatility(), expectedVolatility);
 
         // Warp time by 1 hour to simulate passage of time
-        vm.warp(block.timestamp + 1 hours);
+        vm.warp(block.timestamp + 2 hours);
 
         // Set new volatility through brevisProofMock
         brevisProofMock.setMockOutput(bytes32(0), keccak256(abi.encodePacked(newVolatility)), VK_HASH);
@@ -115,7 +122,7 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
         uint256 smoothedVolatility = (expectedVolatility * (smoothingFactor - 1) + newVolatility) / smoothingFactor;
 
         // Assert the smoothed volatility after the second adjustment
-        assertLe(uniqHook.volatility(), smoothedVolatility);
+        assertLt(uniqHook.volatility(), smoothedVolatility);
     }
 
     function testUniqHookInvariant_FeesAreBounded() public {
@@ -241,6 +248,264 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
             assertGt(postPrice, prePrice);
         }
     }
+
+    function testUniqHookInvariant_DirectionalMultiplier_Aggresive(
+        uint256 priceMovement,
+        uint128 liquidity,
+        bool isAggressive
+    ) public view {
+        // restrict the range of inputs to avoid overflow
+        priceMovement = bound(priceMovement, 1e18, 100e18); // Reasonable price movement range
+        liquidity = uint128(bound(liquidity, 0, 1e28)); // Safe liquidity bounds
+
+        console.log("Price movement: %d", priceMovement);
+        console.log("Liquidity: %d", liquidity);
+
+        uint256[] memory volumes = new uint256[](5);
+        volumes[0] = liquidity / 10; // 10% of liquidity
+        volumes[1] = liquidity / 2; // 50% of liquidity
+        volumes[2] = liquidity; // 100% of liquidity
+        volumes[3] = bound(liquidity * 2, 0, type(uint256).max); // 200% of liquidity
+        volumes[4] = bound(liquidity * 5, 0, type(uint256).max); // 500% of liquidity
+
+        // Gas tracking: start measurement
+        uint256 startGas = gasleft();
+
+        for (uint256 i = 0; i < volumes.length; i++) {
+            uint256 volume = volumes[i];
+            uint256 expectedMultiplier =
+                DynamicFees.calculateDirectionalMultiplier(isAggressive, priceMovement, volume, liquidity);
+
+            console.log("Expected multiplier (Aggressive): %d", expectedMultiplier);
+            console.log("Volume: %d", volume);
+
+            // Gas tracking: end measurement
+            uint256 endGas = gasleft();
+            console.log("Gas used: %d", startGas - endGas);
+
+            // Multiplier should always be greater than 1 for aggressive trades
+            assertGe(expectedMultiplier, 1);
+
+            if (isAggressive) {
+                console.log("isAggressive: %d", isAggressive);
+
+                // Multiplier should increase with higher price movement
+                if (priceMovement > 10e18) {
+                    assertGe(expectedMultiplier, 4); // Highly aggresive multiplier for large price movement
+                } else if (priceMovement > 5e18) {
+                    assertGe(expectedMultiplier, 3); // Aggresive multiplier for moderate price movement
+                } else if (priceMovement > 1e18) {
+                    assertGe(expectedMultiplier, 2); // Slightly aggresive multiplier for small price movement
+                } else {
+                    assertGe(expectedMultiplier, 1); // Default multiplier for small price movement
+                }
+
+                // Volume-to-liquidity ratio should also affect the multiplier
+                if (liquidity > 0) {
+                    uint256 volumeToLiqudityRatio = (volume * 1e18) / liquidity;
+                    console.log("Volume-to-liquidity ratio: %d", volumeToLiqudityRatio);
+
+                    // Multiplier should increase with higher volume-to-liquidity ratio
+                    if (volumeToLiqudityRatio > 1e18) {
+                        assertGe(expectedMultiplier, 3); // Large volume relative to liquidity
+                    } else if (volumeToLiqudityRatio > 5e17) {
+                        assertGe(expectedMultiplier, 2); // Moderate volume relative to liquidity
+                    }
+                } else {
+                    // No liquidity, multiplier should be at least 3
+                    assertGe(expectedMultiplier, 3);
+                }
+            } else {
+                // Multiplier should always be 1 for passive trades
+                assertEq(expectedMultiplier, 1);
+            }
+        }
+
+        // test zero liquidity
+        if (liquidity == 0) {
+            uint256 zerLiquidityMultiplier =
+                DynamicFees.calculateDirectionalMultiplier(isAggressive, priceMovement, 1e18, liquidity);
+            console.log("Zero liquidity multiplier: %d", zerLiquidityMultiplier);
+            assertGe(zerLiquidityMultiplier, 1);
+        }
+
+        // test large price movement and volume
+        priceMovement = 1e35;
+        liquidity = 1e27;
+        uint256 largeVolume = liquidity * 5;
+
+        uint256 largeValueMultiplier =
+            DynamicFees.calculateDirectionalMultiplier(isAggressive, priceMovement, largeVolume, liquidity);
+        console.log("Large value multiplier: %d", largeValueMultiplier);
+        assertGe(largeValueMultiplier, 1);
+    }
+
+    function testUniqHookInvariant_DirectionalMultiplier_Passive(uint256 priceMovement, uint128 liquidity)
+        public
+        pure
+    {
+        priceMovement = bound(priceMovement, 1e16, 100e18); // Reasonable price movement range
+        liquidity = uint128(bound(liquidity, 1, 1e28)); // Safe liquidity bounds
+        uint256 volume = liquidity / 2; // 50% of liquidity
+        bool isAggressive = false; // Passive trade
+
+        uint256 expectedMultiplier =
+            DynamicFees.calculateDirectionalMultiplier(isAggressive, priceMovement, volume, liquidity);
+
+        console.log("Expected multiplier (Passive): %d", expectedMultiplier);
+
+        // For passive trades, the multiplier should always be 1
+        assertEq(expectedMultiplier, 1);
+    }
+
+    function testUnitHookVariant_DirectionalMultiplier_LargeValues() public pure {
+        uint256 priceMovement = 100e18; // Large price movement
+        uint128 liquidity = 1e28; // Large liquidity
+        uint256 volume = bound(liquidity * 5, 0, type(uint256).max); // 500% of liquidity
+        bool isAggressive = true;
+
+        uint256 expectedMultiplier =
+            DynamicFees.calculateDirectionalMultiplier(isAggressive, priceMovement, volume, liquidity);
+
+        console.log("Expected multiplier (Large values): %d", expectedMultiplier);
+
+        // Expect a large multiplier due to high price movement and volume-to-liquidity ratio
+        assertGe(expectedMultiplier, 5);
+    }
+
+    function testUniqHookVariant_DirectionalMultiplier_ZeroLiquidity() public pure {
+        uint256 priceMovement = 10e18; // Some large price movement
+        uint128 liquidity = 0; // Zero liquidity
+        uint256 volume = 1e18; // Arbitrary volume
+        bool isAggressive = true;
+
+        uint256 expectedMultiplier =
+            DynamicFees.calculateDirectionalMultiplier(isAggressive, priceMovement, volume, liquidity);
+
+        console.log("Expected multiplier (Zero liquidity): %d", expectedMultiplier);
+
+        // Multiplier should increase when liquidity is zero
+        assertGe(expectedMultiplier, 3);
+    }
+
+    function testUniqHookVariant_CalculateMovement(
+        PoolKey calldata key,
+        uint160 sqrtPriceX96,
+        uint256 volatility,
+        uint256 timeElapsed
+    ) public {
+        // Bounds for volatility and timeElapsed
+        volatility = bound(volatility, 0, 1e18);
+
+        // Let's assume you have a base timestamp for testing, for example, simulating a past block
+        uint256 mockBlockTime = 1_600_000_000; // Simulate a block timestamp in the past (UNIX timestamp)
+
+        // Now let's bound timeElapsed relative to mockBlockTime
+        timeElapsed = bound(timeElapsed, 0, 30 days); // Simulate timeElapsed up to 1 year for more variability
+
+        // Simulate the current block.timestamp based on the mock time
+        uint256 currentBlockTime = mockBlockTime + timeElapsed;
+        console.log("Simulated current block time: %d", currentBlockTime);
+
+        // Simulate the last timestamp as currentBlockTime - timeElapsed
+        lastTimestamp[poolId] = currentBlockTime - timeElapsed;
+
+        // Add bounds to sqrtPriceX96 to prevent overflow when calculating price
+        uint160 boundedSqrtPriceX96 = uint160(bound(sqrtPriceX96, 1, 2 ** 40)); // Apply bounds
+        uint256 price = (uint256(boundedSqrtPriceX96) * uint256(boundedSqrtPriceX96)) / FixedPoint96.Q96;
+
+        console.log("Bounded sqrtPriceX96: %d", boundedSqrtPriceX96);
+
+        lastPrices[poolId] = price;
+
+        // Gas tracking: start measurement
+        uint256 startGas = gasleft();
+
+        // Calculate the price movement
+        uint256 priceMovement = DynamicFees.calculateMovement(key, manager, volatility, lastPrices, lastTimestamp);
+        console.log("Price movement: %d", priceMovement);
+
+        // Gas tracking: end measurement
+        uint256 endGas = gasleft();
+        console.log("Gas used: %d", startGas - endGas);
+
+        assertGe(priceMovement, 0); // Ensure movement is non-negative
+
+        // Simulate initial case where lastPrice == 0 to test movement driven by volatility
+        if (lastPrices[poolId] == 0) {
+            lastPrices[poolId] = 0;
+            priceMovement = DynamicFees.calculateMovement(key, manager, volatility, lastPrices, lastTimestamp);
+            if (volatility == 0) {
+                assertEq(priceMovement, 1e16, "Movement should be minimal when volatility and price change are 0");
+            } else {
+                assertEq(priceMovement, volatility / 1e10, "Price movement should match volatility-derived value");
+            }
+        }
+
+        // Ensure decay factor has a dampening effect on price movement when timeElapsed > 0
+        if (timeElapsed > 0) {
+            uint256 rawMovement = (priceMovement * 1e18) / DynamicFees.calculateTimeDecayFactor(timeElapsed);
+            uint256 decayFactor = DynamicFees.calculateTimeDecayFactor(timeElapsed);
+            console.log("Raw Movement: %d", rawMovement);
+            console.log("Decay Factor: %d", decayFactor);
+            assertLe(priceMovement, rawMovement, "Decay factor should reduce price movement");
+        }
+
+        // Ensure minimal movement when no price change and no volatility
+        if (volatility == 0 && price == lastPrices[poolId]) {
+            assertEq(priceMovement, 1e16, "Movement should be minimal when volatility and price change are 0");
+        }
+    }
+
+    // KIV: This test is not working as expected
+    // function testUniqHookInvariant_AdjustFeeBasedOnLiquidity(
+    //     uint256 volume,
+    //     uint160 sqrtPriceX96,
+    //     int24 tick,
+    //     uint128 liquidity,
+    //     int24 tickSpacing
+    // ) public pure {
+    //     // Apply bounds to prevent overflow and unrealistic values
+    //     volume = bound(volume, 1, 1e12); // non-zero volume
+    //     sqrtPriceX96 = uint160(bound(sqrtPriceX96, TickMath.getSqrtPriceAtTick(-5), TickMath.getSqrtPriceAtTick(5))); // limit sqrtPrice to avoid overflow
+    //     tick = int24(bound(tick, -5, 5)); // reasonable tick bounds
+    //     liquidity = uint128(bound(liquidity, 1e6, 1e18)); // liquidity must be in reasonable bounds
+    //     tickSpacing = int24(bound(tickSpacing, 1, 2)); // typical tick spacing values
+
+    //     // Call the adjustFeeBasedOnLiquidity function
+    //     uint24 fee = DynamicFees.adjustFeeBasedOnLiquidity(volume, sqrtPriceX96, tick, liquidity, tickSpacing);
+
+    //     // Check if liquidity is zero, fee must be max
+    //     if (liquidity == 0) {
+    //         console.log("Liquidity is zero, asserting MAX_FEE");
+    //         assertEq(fee, Constants.MAX_FEE, "Fee should be MAX_FEE when liquidity is zero");
+    //     } else {
+    //         // Compute TVL and volume-to-liquidity ratio
+    //         uint256 tickTVL = Volatility.computeTickTVLX64(tickSpacing, tick, sqrtPriceX96, liquidity);
+    //         console.log("Tick TVL: %d", tickTVL);
+    //         require(tickTVL > 0, "tickTVL cannot be zero");
+    //         require(tickTVL < 1e40, "tickTVL too large");
+
+    //         uint256 volumeToLiquidityRatio = Math.mulDiv(volume, 1e36, tickTVL);
+    //         console.log("Volume-to-Liquidity Ratio: %d", volumeToLiquidityRatio);
+
+    //         // Assert that the fee is within the expected range based on the ratio
+    //         if (volumeToLiquidityRatio > 1e18) {
+    //             console.log("Volume-to-Liquidity Ratio too high, asserting MAX_FEE");
+    //             assertEq(fee, Constants.MAX_FEE, "Fee should be MAX_FEE for high volume-to-liquidity ratio");
+    //         } else if (volumeToLiquidityRatio < 1e16) {
+    //             console.log("Volume-to-Liquidity Ratio too low, asserting MIN_FEE");
+    //             assertEq(fee, Constants.MIN_FEE, "Fee should be MIN_FEE for low volume-to-liquidity ratio");
+    //         } else {
+    //             // Ensure the fee is scaled correctly between MIN_FEE and MAX_FEE
+    //             uint24 expectedFee = uint24(
+    //                 Math.mulDiv(volumeToLiquidityRatio, Constants.MAX_FEE - Constants.MIN_FEE, 1e18) + Constants.MIN_FEE
+    //             );
+    //             console.log("Expected Fee: %d", expectedFee);
+    //             assertEq(fee, expectedFee, "Fee should be scaled based on volume-to-liquidity ratio");
+    //         }
+    //     }
+    // }
 
     function createUniqHook() internal returns (UniqHook) {
         (, bytes32 salt) = HookMiner.find(
