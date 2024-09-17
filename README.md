@@ -34,9 +34,15 @@ This repository contains two core components: **UniqRWA** and **UniqHook**, whic
 
 ## Overview
 
+![Uniq Architecture Overview](Uniq-Architecture.png "Uniq Architecture Overview")
+
 **UniqRWA** enables the tokenization of real-world assets (such as stocks, bonds, etc.) using Chainlink Functions and APIs to interact with external financial data sources (e.g., Alpaca Markets). The minted RWA tokens can be used as liquidity on Uniswap, further unlocking liquidity in decentralized finance.
 
 **UniqHook** complements this by managing dynamic fees in the liquidity pool. It adjusts fees based on volatility, liquidity depth, and trade size to protect liquidity providers and reduce slippage. The integration with Brevis Contract validates market volatility, enhancing the dynamic fee calculation.
+
+On the on-chain side, the user mints RWA tokens by calling Chainlink Functions, which makes an API call to Alpaca Markets.This call mints RWA tokens and deposits them into the user’s wallet as bRWA, which is an ERC20-backed RWA token.
+
+The user can then pair these tokens with a stablecoin like USDC and initialize them in UniqHook, adding this token pair into the liquidity pool.The price of the RWA is maintained using Chainlink Price Feeds. UniqHook manages three main functionalities: the Time-Weighted AMM (TWAMM) for handling long-term orders, the Dynamic Fee mechanism, which adjusts fees based on market volatility and liquidity, and external integrations with the Brevis contract to validate market volatility and provide proof for dynamic fee adjustments.
 
 ---
 
@@ -93,6 +99,7 @@ UniqHook calculates fees dynamically based on several factors:
 - **Directional Multiplier**: Increases fees for aggressive trades to dissuade market manipulation.
 
 Formula for Dynamic Fee:
+
 ![Dynamic Fee Formula](UniqHook-Formula.png "Dynamic Fee Formula")
 
 ### TWAMM Integration
