@@ -93,7 +93,7 @@ UniqHook calculates fees dynamically based on several factors:
 - **Directional Multiplier**: Increases fees for aggressive trades to dissuade market manipulation.
 
 Formula for Dynamic Fee:
-\[ \text{Fee} = \text{Base Fee} + \left( \frac{\text{Volatility} \times \text{Price Movement}}{\text{Liquidity Depth}} \right) \times \text{Directional Multiplier} \]
+![Dynamic Fee Formula](UniqHook-Formula.png "Dynamic Fee Formula")
 
 ### TWAMM Integration
 
