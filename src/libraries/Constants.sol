@@ -81,4 +81,6 @@ library Constants {
     uint256 public constant VOLATILITY_FACTOR = 1e26;
 
     uint24 public constant HOOK_COMMISSION = 100; // 1bps paid to the hook to cover Brevis costs
+
+    address constant SEPOLIA_FUNCTION_ROUTER = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0;
 }

@@ -557,6 +557,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     }
 
     function testUniqHook1to1_LowVolatilityImpact_OnFeeAdjustment() public {
+        console.log("Test Scenario: Low Volatility (20%) Impact on Fee Adjustment");
         uint256 balance1Before = poolKey.currency1.balanceOfSelf();
         int256 amountSpecified = 1 ether;
         uint248 volatility = 20e18;
@@ -577,8 +578,10 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
 
         assertEq(uniqHook.volatility(), expectedVolatility);
 
-        uint128 liquidityAfterModification = manager.getLiquidity(poolKey.toId());
-        console.log("Liquidity after modification: %d", liquidityAfterModification);
+        console.log("Volume before swap: %s", amountSpecified);
+
+        // uint128 liquidityAfterModification = manager.getLiquidity(poolKey.toId());
+        // console.log("Liquidity after modification: %d", liquidityAfterModification);
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
             amountSpecified: amountSpecified,
@@ -588,12 +591,11 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
 
-        console.log("Liquidity before swap: %s", manager.getLiquidity(poolKey.toId()));
+        // console.log("Liquidity before swap: %s", manager.getLiquidity(poolKey.toId()));
         BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
-        console.log("Liquidity after swap: %s", manager.getLiquidity(poolKey.toId()));
+        // console.log("Liquidity after swap: %s", manager.getLiquidity(poolKey.toId()));
 
-        (uint256 feeGrowthGlobal0, uint256 feeGrowthGlobal1) = manager.getFeeGrowthGlobals(key.toId());
-        console.log("Fee Growth Global 0: %s, Fee Growth Global 1: %s", feeGrowthGlobal0, feeGrowthGlobal1);
+        // (uint256 feeGrowthGlobal0, uint256 feeGrowthGlobal1) = manager.getFeeGrowthGlobals(key.toId());
 
         // Assert that the fee growth is non-zero
         // assertGt(feeGrowthGlobal0, 0, "Fee Growth Global 0 should be greater than zero");
@@ -653,9 +655,9 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
 
-        console.log("Liquidity before swap: %s", manager.getLiquidity(poolKey.toId()));
+        // console.log("Liquidity before swap: %s", manager.getLiquidity(poolKey.toId()));
         BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
-        console.log("Liquidity after swap: %s", manager.getLiquidity(poolKey.toId()));
+        // console.log("Liquidity after swap: %s", manager.getLiquidity(poolKey.toId()));
 
         uint24 fee = uniqHook.getFee(amountSpecified, key, params);
 
@@ -667,6 +669,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     }
 
     function testUniqHook1to1_LowVolatilityHighVolume_OnFeeAdjustment() public {
+        console.log("Test Scenario: Low Volatility (20%) High Volume Impact on Fee Adjustment");
         uint256 balance1Before = poolKey.currency1.balanceOfSelf();
         int256 amountSpecified = 100 ether;
         uint248 volatility = 30e18; // 20%
@@ -698,9 +701,9 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({settleUsingBurn: false, takeClaims: false});
 
-        console.log("Liquidity before swap: %s", manager.getLiquidity(poolKey.toId()));
+        // console.log("Liquidity before swap: %s", manager.getLiquidity(poolKey.toId()));
         BalanceDelta swapDelta = swapRouter.swap(poolKey, params, settings, ZERO_BYTES);
-        console.log("Liquidity after swap: %s", manager.getLiquidity(poolKey.toId()));
+        // console.log("Liquidity after swap: %s", manager.getLiquidity(poolKey.toId()));
 
         uint24 fee = uniqHook.getFee(amountSpecified, key, params);
         console.log("Low volatility fee: %d", fee);
@@ -754,6 +757,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     }
 
     function testUniqHook1to1_MidVolatilityHighVolume_OnFeeAdjustment() public {
+        console.log("Test Scenario: Medium Volatility (60%) High Volume Impact on Fee Adjustment");
         uint256 balance1Before = poolKey.currency1.balanceOfSelf();
         int256 amountSpecified = 100 ether;
         uint248 volatility = 60e18; // 60%
@@ -795,6 +799,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     }
 
     function testUniqHook1to1_HighVolatilityImpact_OnFeeAdjustment() public {
+        console.log("Test Scenario: Low Volume High Volatility (100%) Impact on Fee Adjustment");
         uint256 balance1Before = poolKey.currency1.balanceOfSelf();
         int256 amountSpecified = 1 ether;
         uint248 volatility = 100e18; // 100%
@@ -836,6 +841,7 @@ contract UniqHookTest1to1Ratio is Test, Deployers, GasSnapshot {
     }
 
     function testUniqHook1to1_HighVolatilityHighVolume_OnFeeAdjustment() public {
+        console.log("Test Scenario: High Volume High Volatility (100%) Impact on Fee Adjustment");
         uint256 balance1Before = poolKey.currency1.balanceOfSelf();
         int256 amountSpecified = 100 ether;
         uint248 volatility = 100e18; // 100%

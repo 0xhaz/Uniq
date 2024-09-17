@@ -69,7 +69,7 @@ library DynamicFees {
                 ? ((price - lastPrice) * 1e18) / lastPrice // price increased
                 : ((lastPrice - price) * 1e18) / lastPrice; // price decreased
 
-            console.log("Raw Price Movement: %s", rawMovement);
+            // console.log("Raw Price Movement: %s", rawMovement);
 
             priceMovement = (rawMovement * decayFactor) / 1e18;
         }
@@ -96,7 +96,7 @@ library DynamicFees {
         int24 tickSpacing
     ) internal pure returns (uint24) {
         if (liquidity == 0) {
-            console.log("Liquidity is zero, returning MAX_FEE");
+            // console.log("Liquidity is zero, returning MAX_FEE");
             return Constants.MAX_FEE;
         }
 
@@ -108,7 +108,7 @@ library DynamicFees {
 
         // Compute the TVL at the current tick
         uint256 tickTVL = Volatility.computeTickTVLX64(tickSpacing, tick, sqrtPriceX96, liquidity);
-        console.log("Tick TVL in AdjustFeeBasedOnLiquidity: %s", tickTVL);
+        // console.log("Tick TVL in AdjustFeeBasedOnLiquidity: %s", tickTVL);
 
         require(tickTVL > 0, "tickTVL cannot be zero");
         require(tickTVL < 1e40, "tickTVL too large");
@@ -124,9 +124,9 @@ library DynamicFees {
         // }
 
         // volume-to-liquidity ratio to determine fee adjustment
-        console.log("Volume * 1e18: %s", volume * 1e18); // Before division
+        // console.log("Volume * 1e18: %s", volume * 1e18); // Before division
         uint256 volumeToLiquidityRatio = Math.mulDiv(volume, 1e36, tickTVL); // safe division
-        console.log("Volume-to-Liquidity Ratio: %s", volumeToLiquidityRatio);
+        console.log("Liquidity Adjusted Fee: %s", volumeToLiquidityRatio);
         require(volumeToLiquidityRatio < type(uint256).max, "Overflow in volumeToLiquidityRatio");
 
         // Higher ratio = higher fee, lower ratio = lower fee
@@ -199,10 +199,10 @@ library DynamicFees {
                 }
             } else {
                 baseMultiplier += 2; // if no liquidity, increase multiplier
-                console.log("No Liquidity");
+                    // console.log("No Liquidity");
             }
         }
-        console.log("Directional Multiplier: %s", baseMultiplier);
+        // console.log("Directional Multiplier: %s", baseMultiplier);
         return baseMultiplier;
     }
 

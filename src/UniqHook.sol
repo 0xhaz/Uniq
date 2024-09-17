@@ -387,7 +387,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         bool isAggressive = (priceMovement > 0 && params.zeroForOne) || (priceMovement < 0 && !params.zeroForOne);
         uint256 directionalMultiplier =
             DynamicFees.calculateDirectionalMultiplier(isAggressive, priceMovement, volume, liquidity);
-        console.log("Directional Multiplier: %s", directionalMultiplier);
+        // console.log("Directional Multiplier: %s", directionalMultiplier);
 
         // Volume factor and liquidity-based adjustment using new function
         uint24 liquidityAdjustedFee =
@@ -399,7 +399,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         unchecked {
             dynamicFee = (dynamicFee * directionalMultiplier) / 10;
         }
-        console.log("Dynamic Fee before clamping: %s", dynamicFee);
+        // console.log("Dynamic Fee before clamping: %s", dynamicFee);
 
         // Clamp the fee to the min and max
         if (dynamicFee < Constants.MIN_FEE) {
@@ -408,8 +408,8 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
             dynamicFee = Constants.MAX_FEE;
         }
 
-        console.log("Final Dynamic Fee: %s", dynamicFee);
-        console.log("Current sqrt price after swap: %d", currentSqrtPrice);
+        // console.log("Final Dynamic Fee: %s", dynamicFee);
+        // console.log("Current sqrt price after swap: %d", currentSqrtPrice);
 
         // Store the fee for next time
         if (dynamicFee != lastFee_) {
@@ -480,7 +480,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
         if (vkHash != vkHash_) revert Errors.InvalidVkHash();
 
         uint256 newVolatility = decodeOutput(circuitOutput_);
-        console.log("Decoded volatility: %s", newVolatility);
+        // console.log("Decoded volatility: %s", newVolatility);
         _adjustVolatility(newVolatility);
     }
 
@@ -526,7 +526,7 @@ contract UniqHook is BaseHook, IUniqHook, BrevisApp {
 
         volatility = (volatility * (dynamicSmoothingFactor - 1) + newVolatility) / dynamicSmoothingFactor;
         volatilityHistory.push(volatility);
-        console.log("Volatility after adjustment: %s", volatility);
+        // console.log("Volatility after adjustment: %s", volatility);
 
         emit UpdateVolatility(oldVolatility, volatility);
     }

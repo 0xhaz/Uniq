@@ -169,21 +169,21 @@ library Volatility {
         uint160 sqrtRatioBX96,
         uint128 liquidity
     ) private pure returns (uint256 value0, uint256 value1) {
-        console.log("sqrtRatioX96: %d", sqrtRatioX96);
-        console.log("sqrtRatioAX96: %d", sqrtRatioAX96);
-        console.log("sqrtRatioBX96: %d", sqrtRatioBX96);
-        console.log("Liquidity: %d", liquidity);
+        // console.log("sqrtRatioX96: %d", sqrtRatioX96);
+        // console.log("sqrtRatioAX96: %d", sqrtRatioAX96);
+        // console.log("sqrtRatioBX96: %d", sqrtRatioBX96);
+        // console.log("Liquidity: %d", liquidity);
         assert(sqrtRatioAX96 <= sqrtRatioX96 && sqrtRatioX96 <= sqrtRatioBX96);
-        console.log("Passed assert");
+        // console.log("Passed assert");
 
         unchecked {
             uint224 numerator = uint224(FullMath.mulDiv(sqrtRatioX96, sqrtRatioBX96 - sqrtRatioX96, FixedPoint96.Q96));
-            console.log("Numerator: %d", numerator);
+            // console.log("Numerator: %d", numerator);
 
             value0 = FullMath.mulDiv(liquidity, numerator, sqrtRatioBX96);
             value1 = FullMath.mulDiv(liquidity, sqrtRatioX96 - sqrtRatioAX96, FixedPoint96.Q96);
-            console.log("Value0: %d", value0);
-            console.log("Value1: %d", value1);
+            // console.log("Value0: %d", value0);
+            // console.log("Value1: %d", value1);
         }
     }
 

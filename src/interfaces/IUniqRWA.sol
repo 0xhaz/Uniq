@@ -42,6 +42,8 @@ interface IUniqRWA {
     /// @param amountTokensToMint The amount of tokens to mint
     event MintRequest(bytes32 indexed requestId, uint256 amountTokensToMint);
 
+    event AssetApiBackedStatusUpdated(bytes32 indexed asset, bool status);
+
     /*//////////////////////////////////////////////////////////////
                          EXTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
@@ -54,6 +56,10 @@ interface IUniqRWA {
     /// @param _secretSlot The secret slot
     function setSecretSlot(uint8 _secretSlot) external;
 
+    // function setApiBackedAsset(bytes32 asset, bool isBackedByApi) external;
+
+    // function isApiBackedAsset(bytes32 asset) external view returns (bool);
+
     /// @notice Add a new RWA asset
     /// @param _asset The asset to add
     /// @param _priceFeed The price feed of the asset
@@ -63,7 +69,7 @@ interface IUniqRWA {
     /// @param amountTokensToMint The amount of tokens to mint
     /// @return requestId The request ID
     /// @dev If you pass 0, that will act as a way to get an updarted portfolio balance
-    function sendMintRequest(bytes32 asset, uint256 amountTokensToMint) external returns (bytes32 requestId);
+    // function sendMintRequest(bytes32 asset, uint256 amountTokensToMint) external returns (bytes32 requestId);
 
     /// @notice User sends a Chainlink Function request to sell RWA assets for redemption token
     /// @notice This will put the redemption token in a withdrawal state that the user can call to redeem
