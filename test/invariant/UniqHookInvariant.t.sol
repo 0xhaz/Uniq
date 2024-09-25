@@ -458,54 +458,53 @@ contract UniqHookInvariant is StdInvariant, Test, Deployers {
     }
 
     // KIV: This test is not working as expected
-    // function testUniqHookInvariant_AdjustFeeBasedOnLiquidity(
-    //     uint256 volume,
-    //     uint160 sqrtPriceX96,
-    //     int24 tick,
-    //     uint128 liquidity,
-    //     int24 tickSpacing
-    // ) public pure {
-    //     // Apply bounds to prevent overflow and unrealistic values
-    //     volume = bound(volume, 1, 1e12); // non-zero volume
-    //     sqrtPriceX96 = uint160(bound(sqrtPriceX96, TickMath.getSqrtPriceAtTick(-5), TickMath.getSqrtPriceAtTick(5))); // limit sqrtPrice to avoid overflow
-    //     tick = int24(bound(tick, -5, 5)); // reasonable tick bounds
-    //     liquidity = uint128(bound(liquidity, 1e6, 1e18)); // liquidity must be in reasonable bounds
-    //     tickSpacing = int24(bound(tickSpacing, 1, 2)); // typical tick spacing values
+    function testUniqHookInvariant_AdjustFeeBasedOnLiquidity(
+        uint256 volume,
+        uint160 sqrtPriceX96,
+        int24 tick,
+        uint128 liquidity,
+        int24 tickSpacing
+    ) public pure {
+        // Apply bounds to prevent overflow and unrealistic values
+        volume = bound(volume, 1, 1e12);
+        vm.assume(tick > 0 && tick <= 1000);
+        liquidity = uint128(bound(liquidity, 1e6, 1e18));
+        vm.assume(tickSpacing > 0 && tickSpacing <= 1000);
 
-    //     // Call the adjustFeeBasedOnLiquidity function
-    //     uint24 fee = DynamicFees.adjustFeeBasedOnLiquidity(volume, sqrtPriceX96, tick, liquidity, tickSpacing);
+        // Call the adjustFeeBasedOnLiquidity function
+        uint24 fee = DynamicFees.adjustFeeBasedOnLiquidity(volume, sqrtPriceX96, tick, liquidity, tickSpacing);
 
-    //     // Check if liquidity is zero, fee must be max
-    //     if (liquidity == 0) {
-    //         console.log("Liquidity is zero, asserting MAX_FEE");
-    //         assertEq(fee, Constants.MAX_FEE, "Fee should be MAX_FEE when liquidity is zero");
-    //     } else {
-    //         // Compute TVL and volume-to-liquidity ratio
-    //         uint256 tickTVL = Volatility.computeTickTVLX64(tickSpacing, tick, sqrtPriceX96, liquidity);
-    //         console.log("Tick TVL: %d", tickTVL);
-    //         require(tickTVL > 0, "tickTVL cannot be zero");
-    //         require(tickTVL < 1e40, "tickTVL too large");
+        // Check if liquidity is zero, fee must be max
+        if (liquidity == 0) {
+            console.log("Liquidity is zero, asserting MAX_FEE");
+            assertEq(fee, Constants.MAX_FEE, "Fee should be MAX_FEE when liquidity is zero");
+        } else {
+            // Compute TVL and volume-to-liquidity ratio
+            uint256 tickTVL = Volatility.computeTickTVLX64(tickSpacing, tick, sqrtPriceX96, liquidity);
+            console.log("Tick TVL: %d", tickTVL);
+            require(tickTVL > 0, "tickTVL cannot be zero");
+            require(tickTVL < 1e40, "tickTVL too large");
 
-    //         uint256 volumeToLiquidityRatio = Math.mulDiv(volume, 1e36, tickTVL);
-    //         console.log("Volume-to-Liquidity Ratio: %d", volumeToLiquidityRatio);
+            uint256 volumeToLiquidityRatio = Math.mulDiv(volume, 1e36, tickTVL);
+            console.log("Volume-to-Liquidity Ratio: %d", volumeToLiquidityRatio);
 
-    //         // Assert that the fee is within the expected range based on the ratio
-    //         if (volumeToLiquidityRatio > 1e18) {
-    //             console.log("Volume-to-Liquidity Ratio too high, asserting MAX_FEE");
-    //             assertEq(fee, Constants.MAX_FEE, "Fee should be MAX_FEE for high volume-to-liquidity ratio");
-    //         } else if (volumeToLiquidityRatio < 1e16) {
-    //             console.log("Volume-to-Liquidity Ratio too low, asserting MIN_FEE");
-    //             assertEq(fee, Constants.MIN_FEE, "Fee should be MIN_FEE for low volume-to-liquidity ratio");
-    //         } else {
-    //             // Ensure the fee is scaled correctly between MIN_FEE and MAX_FEE
-    //             uint24 expectedFee = uint24(
-    //                 Math.mulDiv(volumeToLiquidityRatio, Constants.MAX_FEE - Constants.MIN_FEE, 1e18) + Constants.MIN_FEE
-    //             );
-    //             console.log("Expected Fee: %d", expectedFee);
-    //             assertEq(fee, expectedFee, "Fee should be scaled based on volume-to-liquidity ratio");
-    //         }
-    //     }
-    // }
+            // Assert that the fee is within the expected range based on the ratio
+            if (volumeToLiquidityRatio > 1e18) {
+                console.log("Volume-to-Liquidity Ratio too high, asserting MAX_FEE");
+                assertEq(fee, Constants.MAX_FEE, "Fee should be MAX_FEE for high volume-to-liquidity ratio");
+            } else if (volumeToLiquidityRatio < 1e16) {
+                console.log("Volume-to-Liquidity Ratio too low, asserting MIN_FEE");
+                assertEq(fee, Constants.MIN_FEE, "Fee should be MIN_FEE for low volume-to-liquidity ratio");
+            } else {
+                // Ensure the fee is scaled correctly between MIN_FEE and MAX_FEE
+                uint24 expectedFee = uint24(
+                    Math.mulDiv(volumeToLiquidityRatio, Constants.MAX_FEE - Constants.MIN_FEE, 1e18) + Constants.MIN_FEE
+                );
+                console.log("Expected Fee: %d", expectedFee);
+                assertEq(fee, expectedFee, "Fee should be scaled based on volume-to-liquidity ratio");
+            }
+        }
+    }
 
     function createUniqHook() internal returns (UniqHook) {
         (, bytes32 salt) = HookMiner.find(
