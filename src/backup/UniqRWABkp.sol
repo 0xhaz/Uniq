@@ -405,7 +405,7 @@
 //         console.log("Volatility Fee: %s", volatilityFee);
 
 //         uint256 volumeFactor = (sqrt(volume) * volatility) / (VOLATILITY_FACTOR); // Adjust scaling factor as needed
-//         console.log("Volume Factor: %s", volumeFactor);
+//         console.log("Volume Factor: %s", svolumeFactor);
 
 //         // New dynamic fee = base fee + volatility fee + volume factor
 //         uint24 dynamicFee = uint24(lastFee_ - volatilityFee + volumeFactor);
